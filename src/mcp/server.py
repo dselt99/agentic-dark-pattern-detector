@@ -8,45 +8,170 @@ of the agent, executing commands without reasoning.
 import os
 import re
 import time
+import uuid
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 import yaml
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 from mcp.server.fastmcp import FastMCP
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize MCP server
 mcp = FastMCP("Dark Pattern Hunter - Browser Automation")
 
-# Global browser state (singleton pattern)
-_browser: Optional[Browser] = None
-_context: Optional[BrowserContext] = None
-_page: Optional[Page] = None
-_playwright = None
 
+class BrowserSession:
+    """Isolated browser session for a single audit."""
 
-async def get_browser() -> tuple[Browser, BrowserContext, Page]:
-    """Get or create browser instance (singleton pattern)."""
-    global _browser, _context, _page, _playwright
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.playwright: Optional[Playwright] = None
+        self.browser: Optional[Browser] = None
+        self.context: Optional[BrowserContext] = None
+        self.page: Optional[Page] = None
+        self._initialized = False
 
-    if _browser is None:
-        _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(
+    async def initialize(self) -> None:
+        """Initialize browser resources."""
+        if self._initialized:
+            return
+
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(
             headless=os.getenv("BROWSER_HEADLESS", "true").lower() == "true"
         )
-        _context = await _browser.new_context(
+        self.context = await self.browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="DarkPatternHunter/1.0 (Research Bot; +https://github.com/dark-pattern-hunter)",
         )
-        _page = await _context.new_page()
+        self.page = await self.context.new_page()
+        self._initialized = True
+        logger.info(f"Session {self.session_id}: Browser initialized")
 
-    return _browser, _context, _page
+    async def cleanup(self) -> None:
+        """Cleanup browser resources."""
+        errors = []
+        if self.page:
+            try:
+                await self.page.close()
+            except Exception as e:
+                errors.append(f"page: {e}")
+            self.page = None
+
+        if self.context:
+            try:
+                await self.context.close()
+            except Exception as e:
+                errors.append(f"context: {e}")
+            self.context = None
+
+        if self.browser:
+            try:
+                await self.browser.close()
+            except Exception as e:
+                errors.append(f"browser: {e}")
+            self.browser = None
+
+        if self.playwright:
+            try:
+                await self.playwright.stop()
+            except Exception as e:
+                errors.append(f"playwright: {e}")
+            self.playwright = None
+
+        self._initialized = False
+        if errors:
+            logger.warning(f"Session {self.session_id}: Cleanup errors: {errors}")
+        else:
+            logger.info(f"Session {self.session_id}: Cleaned up successfully")
 
 
-def check_robots_txt(url: str) -> tuple[bool, Optional[str]]:
+class SessionManager:
+    """Manages browser sessions with automatic cleanup."""
+
+    def __init__(self):
+        self._sessions: Dict[str, BrowserSession] = {}
+        self._current_session_id: Optional[str] = None
+
+    def create_session(self) -> str:
+        """Create a new session and return its ID."""
+        session_id = str(uuid.uuid4())[:8]
+        self._sessions[session_id] = BrowserSession(session_id)
+        self._current_session_id = session_id
+        logger.info(f"Created session: {session_id}")
+        return session_id
+
+    def get_session(self, session_id: Optional[str] = None) -> Optional[BrowserSession]:
+        """Get a session by ID, or the current session."""
+        sid = session_id or self._current_session_id
+        if sid is None:
+            return None
+        return self._sessions.get(sid)
+
+    async def close_session(self, session_id: str) -> None:
+        """Close and remove a session."""
+        session = self._sessions.pop(session_id, None)
+        if session:
+            await session.cleanup()
+            if self._current_session_id == session_id:
+                self._current_session_id = None
+
+    async def close_all(self) -> None:
+        """Close all sessions."""
+        for sid in list(self._sessions.keys()):
+            await self.close_session(sid)
+
+    @asynccontextmanager
+    async def session_context(self):
+        """Context manager for automatic session lifecycle."""
+        session_id = self.create_session()
+        session = self.get_session(session_id)
+        try:
+            await session.initialize()
+            yield session
+        finally:
+            await self.close_session(session_id)
+
+
+# Global session manager
+_session_manager = SessionManager()
+
+
+async def get_browser() -> tuple[Browser, BrowserContext, Page]:
+    """Get browser from current session, creating one if needed."""
+    session = _session_manager.get_session()
+
+    # Auto-create session for backward compatibility
+    if session is None:
+        session_id = _session_manager.create_session()
+        session = _session_manager.get_session(session_id)
+
+    if not session._initialized:
+        await session.initialize()
+
+    return session.browser, session.context, session.page
+
+
+def get_session_manager() -> SessionManager:
+    """Get the global session manager."""
+    return _session_manager
+
+
+def check_robots_txt(url: str, fail_open: bool = False) -> tuple[bool, Optional[str]]:
     """Check if the URL is allowed by robots.txt.
+
+    Args:
+        url: The URL to check.
+        fail_open: If True, allow access on parse errors (legacy behavior).
+                   If False (default), deny access on parse errors (fail closed).
 
     Returns:
         Tuple of (is_allowed, error_message).
@@ -70,10 +195,19 @@ def check_robots_txt(url: str) -> tuple[bool, Optional[str]]:
             return False, f"robots.txt disallows {user_agent} from {path}"
 
         return True, None
-    except Exception as e:
-        # If robots.txt doesn't exist or is unparseable, allow by default
-        # (permissive approach - some sites don't have robots.txt)
+    except FileNotFoundError:
+        # No robots.txt means no restrictions
+        logger.info(f"No robots.txt found for {parsed.netloc} - allowing access")
         return True, None
+    except Exception as e:
+        # Parse error or fetch error
+        error_msg = f"robots.txt check failed for {url}: {e}"
+        if fail_open:
+            logger.warning(f"{error_msg} - allowing access (fail_open=True)")
+            return True, None
+        else:
+            logger.warning(f"{error_msg} - denying access (fail_closed)")
+            return False, f"robots.txt check failed: {e}. Use fail_open=True to override."
 
 
 @mcp.tool()
@@ -136,15 +270,32 @@ async def browser_navigate(url: str) -> dict:
         }
 
 
+# Default and maximum depth limits
+DEFAULT_TREE_DEPTH = 15
+MAX_TREE_DEPTH = 50
+DEEP_SCAN_DEPTH = 30  # For targeted deep scans
+
+
 @mcp.tool()
-async def get_accessibility_tree(selector: str = "body") -> dict:
+async def get_accessibility_tree(
+    selector: str = "body",
+    max_depth: int = DEFAULT_TREE_DEPTH,
+    include_hidden: bool = False,
+) -> dict:
     """Returns a semantic YAML representation of the current page structure.
 
     Use this to understand the page content without visual noise.
     Extracts semantic information from the page including text, roles, and structure.
 
     Args:
-        selector: Optional CSS selector to root the tree at. Defaults to 'body'.
+        selector: CSS selector to root the tree at. Defaults to 'body'.
+        max_depth: Maximum depth to traverse (default 15, max 50).
+                   Use higher values (20-30) when investigating nested UI
+                   like accordion menus, modals, or multi-step forms where
+                   dark patterns might be hidden deep in the DOM.
+        include_hidden: If True, include elements with display:none or
+                        visibility:hidden. Useful for finding hidden form
+                        fields or pre-checked options.
 
     Returns:
         Dictionary with the YAML representation of the page structure.
@@ -152,12 +303,31 @@ async def get_accessibility_tree(selector: str = "body") -> dict:
     try:
         _, _, page = await get_browser()
 
+        # Clamp depth to safe bounds
+        effective_depth = max(1, min(max_depth, MAX_TREE_DEPTH))
+        if max_depth != effective_depth:
+            logger.warning(f"Depth {max_depth} clamped to {effective_depth}")
+
         # Extract semantic structure using JavaScript
-        # This replaces the deprecated accessibility.snapshot() API
         extract_script = """
-        (selector) => {
+        (args) => {
+            const { selector, maxDepth, includeHidden } = args;
+            let maxDepthReached = 0;
+            let nodesProcessed = 0;
+            let nodesTruncated = 0;
+
             function extractNode(element, depth = 0) {
-                if (!element || depth > 10) return null;
+                if (!element) return null;
+
+                // Track max depth reached
+                if (depth > maxDepthReached) maxDepthReached = depth;
+                nodesProcessed++;
+
+                // Depth limit check
+                if (depth > maxDepth) {
+                    nodesTruncated++;
+                    return { tag: '...', text: '[depth limit reached]', _truncated: true };
+                }
 
                 const result = {};
 
@@ -185,22 +355,42 @@ async def get_accessibility_tree(selector: str = "body") -> dict:
                 if (element.value) attrs.value = element.value.substring(0, 100);
                 if (element.checked !== undefined) attrs.checked = element.checked;
                 if (element.disabled) attrs.disabled = true;
+                if (element.name) attrs.name = element.name;
 
                 // Get aria attributes
                 const ariaLabel = element.getAttribute?.('aria-label');
                 if (ariaLabel) attrs['aria-label'] = ariaLabel;
                 const ariaHidden = element.getAttribute?.('aria-hidden');
                 if (ariaHidden === 'true') attrs['aria-hidden'] = true;
+                const ariaExpanded = element.getAttribute?.('aria-expanded');
+                if (ariaExpanded) attrs['aria-expanded'] = ariaExpanded;
+
+                // Check for pre-checked inputs (sneak into basket detection)
+                if (element.tagName?.toLowerCase() === 'input') {
+                    const inputType = element.type?.toLowerCase();
+                    if (inputType === 'checkbox' || inputType === 'radio') {
+                        attrs.checked = element.checked;
+                        if (element.defaultChecked) attrs.defaultChecked = true;
+                    }
+                }
 
                 if (Object.keys(attrs).length > 0) result.attrs = attrs;
 
-                // Get children (skip script, style, hidden elements)
+                // Get children (skip script, style, hidden elements unless requested)
                 const skipTags = ['script', 'style', 'noscript', 'svg', 'path'];
                 const children = Array.from(element.children || [])
                     .filter(child => {
                         if (skipTags.includes(child.tagName?.toLowerCase())) return false;
-                        const style = window.getComputedStyle(child);
-                        if (style.display === 'none' || style.visibility === 'hidden') return false;
+                        if (!includeHidden) {
+                            try {
+                                const style = window.getComputedStyle(child);
+                                if (style.display === 'none' || style.visibility === 'hidden') {
+                                    return false;
+                                }
+                            } catch (e) {
+                                // getComputedStyle can fail on some elements
+                            }
+                        }
                         return true;
                     })
                     .map(child => extractNode(child, depth + 1))
@@ -217,30 +407,140 @@ async def get_accessibility_tree(selector: str = "body") -> dict:
 
             if (!root) return { error: 'Selector not found: ' + selector };
 
-            return extractNode(root);
+            const tree = extractNode(root);
+
+            return {
+                tree: tree,
+                stats: {
+                    maxDepthReached: maxDepthReached,
+                    nodesProcessed: nodesProcessed,
+                    nodesTruncated: nodesTruncated,
+                    requestedDepth: maxDepth
+                }
+            };
         }
         """
 
-        structure = await page.evaluate(extract_script, selector)
+        result = await page.evaluate(
+            extract_script,
+            {
+                "selector": selector,
+                "maxDepth": effective_depth,
+                "includeHidden": include_hidden,
+            }
+        )
 
-        if structure and structure.get("error"):
+        if result and result.get("error"):
             return {
                 "status": "error",
-                "message": structure["error"],
+                "message": result["error"],
             }
+
+        structure = result.get("tree", {})
+        stats = result.get("stats", {})
 
         # Convert to YAML string
         yaml_str = yaml.dump(structure, default_flow_style=False, allow_unicode=True)
 
-        return {
+        response = {
             "status": "success",
             "tree": yaml_str,
             "selector": selector,
+            "depth_used": effective_depth,
+            "max_depth_reached": stats.get("maxDepthReached", 0),
+            "nodes_processed": stats.get("nodesProcessed", 0),
         }
+
+        # Warn if depth limit was hit
+        if stats.get("nodesTruncated", 0) > 0:
+            response["warning"] = (
+                f"Depth limit ({effective_depth}) reached at {stats['nodesTruncated']} nodes. "
+                "Consider using a higher max_depth to see nested content."
+            )
+            logger.warning(
+                f"Tree extraction hit depth limit: {stats['nodesTruncated']} nodes truncated"
+            )
+
+        return response
+
     except Exception as e:
         return {
             "status": "error",
             "message": f"Error getting accessibility tree: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def deep_scan_element(selector: str) -> dict:
+    """Perform a deep scan of a specific element to find nested content.
+
+    This is specifically designed for detecting Roach Motel patterns where
+    cancellation or unsubscribe options are buried deep in nested UI structures
+    like accordion menus, modal dialogs, or multi-step settings pages.
+
+    Uses a higher depth limit (30) and includes hidden elements.
+
+    Args:
+        selector: CSS selector for the element to deeply scan.
+
+    Returns:
+        Dictionary with deep tree structure and analysis hints.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        # Check if element exists first
+        element = await page.query_selector(selector)
+        if not element:
+            return {
+                "status": "error",
+                "message": f"Element not found: {selector}",
+            }
+
+        # Get the deep tree
+        result = await get_accessibility_tree(
+            selector=selector,
+            max_depth=DEEP_SCAN_DEPTH,
+            include_hidden=True,
+        )
+
+        if result.get("status") != "success":
+            return result
+
+        # Analyze for patterns that might indicate hidden options
+        tree_text = result.get("tree", "").lower()
+
+        hints = []
+
+        # Look for cancellation-related terms
+        cancel_terms = ["cancel", "unsubscribe", "deactivate", "close account", "delete account", "opt out", "remove"]
+        found_cancel_terms = [term for term in cancel_terms if term in tree_text]
+        if found_cancel_terms:
+            hints.append(f"Found cancellation-related terms: {found_cancel_terms}")
+
+        # Look for hidden elements that were revealed
+        if "aria-hidden" in tree_text or "display: none" in tree_text:
+            hints.append("Found hidden elements - may contain obscured options")
+
+        # Look for collapsed/expandable sections
+        if "aria-expanded" in tree_text:
+            hints.append("Found expandable sections - check if important options are collapsed by default")
+
+        # Look for multi-step indicators
+        step_terms = ["step", "next", "continue", "proceed"]
+        if any(term in tree_text for term in step_terms):
+            hints.append("Found multi-step flow indicators - may be a Roach Motel pattern")
+
+        result["deep_scan"] = True
+        result["analysis_hints"] = hints
+        result["selector_scanned"] = selector
+
+        return result
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error in deep scan: {str(e)}",
         }
 
 
@@ -301,6 +601,148 @@ async def take_screenshot(
         return {
             "status": "error",
             "message": f"Error taking screenshot: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def browser_click(selector: str) -> dict:
+    """Clicks an element on the page. Use this to test interaction flows.
+
+    Useful for:
+    - Testing Roach Motel: Click through signup vs. cancellation flows
+    - Testing Sneak into Basket: Click "Add to Cart" and check what gets added
+    - Navigating multi-step processes
+
+    Args:
+        selector: CSS selector for the element to click.
+
+    Returns:
+        Dictionary with status and any navigation/state changes detected.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        # Find the element
+        element = await page.query_selector(selector)
+        if not element:
+            return {
+                "status": "error",
+                "message": f"Element not found: {selector}",
+            }
+
+        # Get element info before click
+        element_text = await element.text_content()
+        element_tag = await element.evaluate("el => el.tagName.toLowerCase()")
+
+        # Get current URL before click
+        url_before = page.url
+
+        # Click the element
+        await element.click()
+
+        # Wait for potential navigation or state change
+        await page.wait_for_load_state("networkidle", timeout=5000)
+
+        # Get URL after click
+        url_after = page.url
+        navigated = url_before != url_after
+
+        return {
+            "status": "success",
+            "message": f"Clicked {element_tag}: '{element_text[:50] if element_text else 'no text'}'",
+            "navigated": navigated,
+            "url_before": url_before,
+            "url_after": url_after,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error clicking element: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def get_page_url() -> dict:
+    """Returns the current page URL. Useful for tracking navigation state."""
+    try:
+        _, _, page = await get_browser()
+        return {
+            "status": "success",
+            "url": page.url,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error getting URL: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def browser_reload() -> dict:
+    """Reloads the current page. Use this to test for False Urgency patterns.
+
+    After reload, check if countdown timers reset to their original values,
+    which indicates artificial/fake urgency rather than genuine time limits.
+
+    Returns:
+        Dictionary with status, message, and any timer values detected.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        # Capture any visible timers/countdowns before reload
+        timer_script = """
+        () => {
+            const timerPatterns = [
+                /\\d{1,2}:\\d{2}(:\\d{2})?/,  // 05:00 or 05:00:00
+                /\\d+\\s*(hours?|minutes?|seconds?|hrs?|mins?|secs?)/i,
+            ];
+
+            const timers = [];
+            const walker = document.createTreeWalker(
+                document.body,
+                NodeFilter.SHOW_TEXT,
+                null,
+                false
+            );
+
+            let node;
+            while (node = walker.nextNode()) {
+                const text = node.textContent.trim();
+                for (const pattern of timerPatterns) {
+                    const match = text.match(pattern);
+                    if (match) {
+                        timers.push({
+                            text: text.substring(0, 100),
+                            match: match[0]
+                        });
+                        break;
+                    }
+                }
+            }
+            return timers.slice(0, 10);  // Limit to 10 timers
+        }
+        """
+
+        timers_before = await page.evaluate(timer_script)
+
+        # Reload the page
+        await page.reload(wait_until="networkidle")
+
+        # Capture timers after reload
+        timers_after = await page.evaluate(timer_script)
+
+        return {
+            "status": "success",
+            "message": "Page reloaded successfully",
+            "timers_before": timers_before,
+            "timers_after": timers_after,
+            "hint": "If timers reset to original values, this indicates False Urgency",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error reloading page: {str(e)}",
         }
 
 
@@ -403,36 +845,13 @@ async def maps_topology() -> dict:
 
 
 async def cleanup():
-    """Cleanup browser resources."""
-    global _browser, _context, _page, _playwright
+    """Cleanup all browser sessions."""
+    await _session_manager.close_all()
 
-    try:
-        if _page:
-            try:
-                await _page.close()
-            except Exception:
-                pass
-            _page = None
-        if _context:
-            try:
-                await _context.close()
-            except Exception:
-                pass
-            _context = None
-        if _browser:
-            try:
-                await _browser.close()
-            except Exception:
-                pass
-            _browser = None
-        if _playwright:
-            try:
-                await _playwright.stop()
-            except Exception:
-                pass
-            _playwright = None
-    except Exception:
-        pass  # Ignore cleanup errors
+
+async def cleanup_session(session_id: str):
+    """Cleanup a specific browser session."""
+    await _session_manager.close_session(session_id)
 
 
 if __name__ == "__main__":

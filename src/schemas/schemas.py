@@ -56,15 +56,16 @@ class DetectedPattern(BaseModel):
         ),
     )
 
-    @field_validator("confidence_score")
-    @classmethod
-    def validate_confidence(cls, v: float) -> float:
-        """Ensure confidence score meets minimum threshold for reporting."""
-        if v < 0.7:
-            raise ValueError(
-                "Confidence score too low. Do not report uncertainty as a finding."
-            )
-        return v
+    def is_high_confidence(self, threshold: float = 0.7) -> bool:
+        """Check if finding meets confidence threshold.
+
+        Args:
+            threshold: Minimum confidence score (default 0.7).
+
+        Returns:
+            True if confidence meets or exceeds threshold.
+        """
+        return self.confidence_score >= threshold
 
 
 class AuditResult(BaseModel):
@@ -101,3 +102,19 @@ class AuditResult(BaseModel):
                 "findings": [],
             }
         }
+
+    def get_high_confidence_findings(self, threshold: float = 0.7) -> List[DetectedPattern]:
+        """Filter findings to only include those meeting confidence threshold.
+
+        Args:
+            threshold: Minimum confidence score (default 0.7).
+
+        Returns:
+            List of findings meeting the threshold.
+        """
+        return [f for f in self.findings if f.is_high_confidence(threshold)]
+
+    @property
+    def high_confidence_count(self) -> int:
+        """Count of findings meeting default confidence threshold."""
+        return len(self.get_high_confidence_findings())

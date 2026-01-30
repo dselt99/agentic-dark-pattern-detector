@@ -130,12 +130,13 @@ To be a useful tool, the Dark Pattern Hunter must minimize false positives. The 
 
 ### Constraint A: Legitimate Scarcity
 
-**Do NOT flag stock counters** (e.g., "3 left in stock") if they appear tied to real inventory systems. 
+**Do NOT flag stock counters** (e.g., "3 left in stock") if they appear tied to real inventory systems.
 
 **How to verify:**
-- If the number remains static across refreshes or decreases logically (e.g., 3 → 2 → 1), assume it is valid.
+- If the number decreases logically over time (e.g., 3 → 2 → 1), assume it is valid inventory.
 - If the number is tied to a backend inventory system (check network requests), it is legitimate.
-- Only flag if the number resets, increases randomly, or shows clear signs of fabrication.
+- **DO flag if:** the number resets on reload, increases randomly, or shows clear signs of fabrication.
+- **Note:** A stock number that remains exactly static across many refreshes is suspicious but not conclusive—use judgment based on context (small inventory vs. high-traffic site).
 
 ### Constraint B: Security Friction
 
@@ -175,9 +176,11 @@ When analyzing a page:
 2. **Hypothesize:** Based on the skill definitions above, formulate hypotheses about potential dark patterns.
 
 3. **Test:** Use available tools to test hypotheses:
-   - For False Urgency: Refresh the page to check if timers reset
-   - For Roach Motel: Count clicks required for signup vs. cancellation
-   - For Sneak into Basket: Track cart contents vs. explicit add actions
+   - For False Urgency: Use `browser_reload` to check if timers reset to their original values
+   - For Roach Motel: Analyze accessibility tree for asymmetric navigation paths (signup vs. cancel)
+   - For Sneak into Basket: Look for pre-checked checkboxes in the accessibility tree
+   - For Confirmshaming: Check button text for sentiment asymmetry (positive accept vs. negative reject)
+   - For Forced Continuity: Look for buried billing terms, auto-renewal language
 
 4. **Document:** For each detected pattern, provide:
    - The specific pattern type
