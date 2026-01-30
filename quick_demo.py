@@ -67,7 +67,8 @@ async def run_quick_demo(simulation: str = "false_urgency"):
         await browser_navigate(url)
 
         print("Extracting page structure...")
-        tree_result = await get_accessibility_tree()
+        # Use include_hidden=True to catch roach motel patterns (cancel links in collapsed menus)
+        tree_result = await get_accessibility_tree(max_depth=20, include_hidden=True)
         if tree_result.get("status") != "success":
             print(f"Error: {tree_result.get('message')}")
             return
@@ -110,7 +111,7 @@ Only return JSON, no other text."""
 
 Look for:
 - False urgency (countdown timers, "limited time" claims)
-- Roach motel (easy signup, hard cancellation)
+- Roach motel (easy signup, hard cancellation) - Look for ASYMMETRY: prominent signup buttons vs hidden cancel links in accordions/FAQs/footers. The tree includes hidden elements.
 - Confirmshaming (guilt-inducing decline options)
 - Sneak into basket (pre-checked add-ons)
 - Forced continuity (hidden auto-renewal)

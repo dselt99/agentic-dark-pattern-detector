@@ -134,10 +134,21 @@ async def run_demo(simulation_name: str, port: int = 8888, verbose: bool = False
             print(f"[VERBOSE] Accessibility tree:\n{tree_result.get('tree', '')[:2000]}...")
         print("-" * 60)
 
+    # Use more steps for patterns that need exploration
+    # roach_motel needs clicking and exploration
+    # false_urgency needs reload testing
+    # clean pages need full analysis to confirm no patterns
+    step_config = {
+        "roach_motel": 5,
+        "false_urgency": 4,
+        "clean_stock": 3,
+    }
+    max_steps = step_config.get(simulation_name, 3)
+
     agent = DarkPatternAgent(
         model=model,
         provider=provider,
-        max_steps=1,  # Single pass for demo - faster
+        max_steps=max_steps,
     )
 
     try:
