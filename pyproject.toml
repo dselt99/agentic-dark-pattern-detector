@@ -1,0 +1,44 @@
+[project]
+name = "dark-pattern-hunter"
+version = "0.1.0"
+description = "An agentic AI system for detecting dark patterns in web interfaces"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=0.1.0",
+    "playwright>=1.40.0",
+    "pydantic>=2.0.0",
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "beautifulsoup4>=4.12.0",
+    "httpx>=0.25.0",
+    "pyyaml>=6.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

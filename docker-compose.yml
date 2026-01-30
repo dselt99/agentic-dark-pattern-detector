@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  chromium:
+    image: mcr.microsoft.com/playwright/python:v1.40.0-focal
+    container_name: dark-pattern-hunter-chromium
+    ports:
+      - "9222:9222"
+    environment:
+      - DISPLAY=:99
+    volumes:
+      - ./artifacts:/app/artifacts
+    command: >
+      sh -c "Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+             python -m playwright install chromium &&
+             python -m playwright install-deps chromium &&
+             tail -f /dev/null"
+    networks:
+      - dark-pattern-network
+
+networks:
+  dark-pattern-network:
+    driver: bridge

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Page - Legitimate Stock Counter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .product {
+            border: 2px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .stock-counter {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 15px 0;
+            font-size: 16px;
+        }
+        .buy-button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            font-size: 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Premium Product</h1>
+    
+    <div class="product">
+        <h2>High-Quality Widget</h2>
+        <p><strong>Price: $149.99</strong></p>
+        
+        <!-- Legitimate stock counter: Static number that doesn't reset -->
+        <div class="stock-counter" id="stockCounter">
+            <strong>⚠️ Low Stock:</strong> Only <span id="stockCount">3</span> items left in stock
+        </div>
+        
+        <p>This is a legitimate inventory system. The stock count is tied to our backend database.</p>
+        <p>Features:</p>
+        <ul>
+            <li>High quality materials</li>
+            <li>30-day money-back guarantee</li>
+            <li>Free shipping</li>
+        </ul>
+        
+        <button class="buy-button" onclick="handlePurchase()">Add to Cart</button>
+    </div>
+
+    <script>
+        // Legitimate stock counter: Static value that doesn't reset on reload
+        // In a real system, this would come from a backend API
+        let stockCount = 3; // This remains constant across page reloads
+        
+        function handlePurchase() {
+            if (stockCount > 0) {
+                stockCount--;
+                document.getElementById('stockCount').textContent = stockCount;
+                alert('Item added to cart!');
+                
+                if (stockCount === 0) {
+                    document.getElementById('stockCounter').innerHTML = 
+                        '<strong>Out of Stock</strong>';
+                }
+            } else {
+                alert('Sorry, this item is out of stock.');
+            }
+        }
+        
+        // Stock count persists across reloads (simulating backend persistence)
+        // This is NOT a dark pattern - it's legitimate inventory tracking
+        window.onload = function() {
+            // In a real system, this would fetch from backend
+            // For this simulation, we keep it static to show it's legitimate
+            document.getElementById('stockCount').textContent = stockCount;
+        };
+    </script>
+</body>
+</html>

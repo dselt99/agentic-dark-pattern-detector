@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Premium Subscription Service</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .subscribe-button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 20px 40px;
+            font-size: 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            display: block;
+            margin: 30px auto;
+            width: 300px;
+        }
+        .subscribe-button:hover {
+            background-color: #45a049;
+        }
+        .help-section {
+            margin-top: 50px;
+            border-top: 1px solid #ddd;
+            padding-top: 20px;
+        }
+        .accordion {
+            background-color: #f1f1f1;
+            color: #444;
+            cursor: pointer;
+            padding: 18px;
+            width: 100%;
+            border: none;
+            text-align: left;
+            outline: none;
+            font-size: 15px;
+            transition: 0.4s;
+        }
+        .accordion:hover {
+            background-color: #ddd;
+        }
+        .accordion.active {
+            background-color: #ccc;
+        }
+        .panel {
+            padding: 0 18px;
+            display: none;
+            background-color: white;
+            overflow: hidden;
+        }
+        .panel.active {
+            display: block;
+        }
+        .footer-link {
+            color: #888;
+            text-decoration: none;
+            font-size: 12px;
+            margin-top: 10px;
+            display: inline-block;
+        }
+        .footer-link:hover {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Welcome to Premium Subscription</h1>
+    <p>Get unlimited access to all features for just $9.99/month!</p>
+    
+    <!-- Easy entry: Giant green subscribe button -->
+    <button class="subscribe-button" onclick="alert('Subscribed!')">
+        Subscribe Now
+    </button>
+
+    <!-- Hard exit: Cancel link hidden in accordion, styled as footer text -->
+    <div class="help-section">
+        <h2>Help & Support</h2>
+        <button class="accordion" onclick="toggleAccordion()">Frequently Asked Questions</button>
+        <div class="panel" id="helpPanel">
+            <p>Q: How do I manage my subscription?</p>
+            <p>A: Contact our support team for assistance.</p>
+            <p>Q: Can I cancel my subscription?</p>
+            <p>A: Yes, you can cancel by clicking <a href="#" class="footer-link" onclick="alert('Cancellation requires 5 more steps...'); return false;">here</a>.</p>
+            <p style="color: #888; font-size: 11px; margin-top: 20px;">
+                <a href="#" class="footer-link" id="cancelLink" onclick="handleCancel(); return false;">Cancel Subscription</a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        function toggleAccordion() {
+            const panel = document.getElementById('helpPanel');
+            panel.classList.toggle('active');
+            const accordion = document.querySelector('.accordion');
+            accordion.classList.toggle('active');
+        }
+
+        function handleCancel() {
+            alert('To cancel, please call 1-800-CANCEL during business hours (Mon-Fri, 9am-5pm EST)');
+        }
+
+        // Initially hide the panel (accordion closed)
+        document.getElementById('helpPanel').style.display = 'none';
+    </script>
+</body>
+</html>

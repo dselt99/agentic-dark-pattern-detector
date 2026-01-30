@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Limited Time Offer - Shop Now!</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .product {
+            border: 2px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .timer {
+            background-color: #ff4444;
+            color: white;
+            padding: 15px;
+            font-size: 28px;
+            font-weight: bold;
+            text-align: center;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .urgency-text {
+            color: #ff4444;
+            font-weight: bold;
+            font-size: 18px;
+            margin: 10px 0;
+        }
+        .buy-button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            font-size: 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Amazing Product Deal</h1>
+    
+    <div class="product">
+        <h2>Premium Widget</h2>
+        <p class="urgency-text">⚡ Limited Time Offer - Act Now!</p>
+        
+        <!-- False urgency: Timer that resets on page reload -->
+        <div class="timer" id="timer">05:00</div>
+        <p style="text-align: center; margin: 10px 0;">
+            <strong>Hurry! This offer expires in:</strong>
+        </p>
+        
+        <p>Don't miss out on this incredible deal! Only available for a limited time.</p>
+        <p><strong>Price: $99.99</strong> <span style="text-decoration: line-through; color: #888;">$199.99</span></p>
+        
+        <button class="buy-button" onclick="alert('Added to cart!')">Buy Now</button>
+    </div>
+
+    <script>
+        // False urgency pattern: Timer resets to 5:00 every time page loads
+        let timeLeft = 300; // 5 minutes in seconds
+        
+        function updateTimer() {
+            const minutes = Math.floor(timeLeft / 60);
+            const seconds = timeLeft % 60;
+            const timerElement = document.getElementById('timer');
+            timerElement.textContent = 
+                `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            
+            if (timeLeft > 0) {
+                timeLeft--;
+            } else {
+                // Reset to 5:00 when it reaches 0 (fake urgency)
+                timeLeft = 300;
+            }
+        }
+        
+        // Update timer every second
+        setInterval(updateTimer, 1000);
+        
+        // Reset timer on page load/reload (this is the dark pattern)
+        window.onload = function() {
+            timeLeft = 300; // Always reset to 5:00
+            updateTimer();
+        };
+    </script>
+</body>
+</html>
