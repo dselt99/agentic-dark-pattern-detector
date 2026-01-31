@@ -279,7 +279,7 @@ def sanitize_untrusted_content(
     # 4. Check for repetition attacks
     if detect_repetition_attack(sanitized):
         warnings.append("INJECTION WARNING: Excessive repetition detected (possible token attack)")
-        injection_detected = True
+        # injection_detected = True
 
     # 5. Check for encoded content
     encoded_warnings = detect_encoded_content(sanitized)

@@ -14,6 +14,7 @@ import sys
 import os
 import json
 from pathlib import Path
+from pydantic import BaseModel, HttpUrl, field_validator
 
 # Setup paths
 project_root = Path(__file__).parent
@@ -38,6 +39,20 @@ SIMULATIONS = {
 
 class QuietHTTPHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args): pass
+
+# Ensures input is valid url
+class CustomURL(BaseModel):
+    url: HttpUrl
+
+    @field_validator('url', mode='before')
+    @classmethod
+    def check_url(cls, v):
+        if not isinstance(v, str):
+            raise ValueError('URL must be a string')
+        if not v.startswith("http://") and not v.startswith("https://"):
+            v = 'https://' + v
+            return v
+        return v
 
 
 async def run_quick_demo(simulation: str = "false_urgency"):
@@ -195,13 +210,17 @@ async def run_real_url_demo(url: str):
             return
 
         print("Extracting page structure...")
-        tree_result = await get_accessibility_tree()
+        # Use higher depth and include hidden for real sites
+        tree_result = await get_accessibility_tree(max_depth=25, include_hidden=True)
         if tree_result.get("status") != "success":
             print(f"Error: {tree_result.get('message')}")
             return
 
         tree_yaml = tree_result.get("tree", "")
         print(f"Page structure extracted ({len(tree_yaml)} chars)")
+
+        if tree_result.get("warning"):
+            print(f"Note: {tree_result.get('warning')}")
 
         # Load skill
         skill_path = project_root / "skills" / "detect-manipulation.md"
@@ -304,17 +323,24 @@ Respond with JSON only."""
 
 def main():
     arg = sys.argv[1] if len(sys.argv) > 1 else "false_urgency"
-
     if arg == "--list":
         print("Available simulations:", ", ".join(SIMULATIONS.keys()))
         print("\nOr provide any URL: python quick_demo.py https://example.com")
         return
-
-    # Check if it's a URL
-    if arg.startswith("http://") or arg.startswith("https://"):
-        asyncio.run(run_real_url_demo(arg))
-    else:
+    
+    if arg in SIMULATIONS:
         asyncio.run(run_quick_demo(arg))
+        return
+
+    # Try to parse as URL
+    try:
+        input_url = CustomURL(url=arg)
+        asyncio.run(run_real_url_demo(str(input_url.url)))
+    except ValueError:
+        print('Invalid URL - ensure your site is valid')
+        print(f"Available simulations: {', '.join(SIMULATIONS.keys())}")
+
+
 
 
 if __name__ == "__main__":

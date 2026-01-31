@@ -185,6 +185,46 @@ async def run_all_demos(port: int = 8888, verbose: bool = False):
         print("\n")
 
 
+async def run_url_audit(url: str, verbose: bool = False):
+    """Run full agentic audit against a custom URL."""
+    print_header("DARK PATTERN HUNTER - LIVE SITE AUDIT")
+    print(f"Target URL: {url}")
+    print("-" * 60)
+
+    # Initialize agent
+    model = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")
+    provider = os.getenv("LLM_PROVIDER", "anthropic")
+
+    print(f"Using model: {model} ({provider})")
+
+    # If verbose, show accessibility tree before audit
+    if verbose:
+        from src.mcp.server import browser_navigate, get_accessibility_tree
+        print("\n[VERBOSE] Fetching accessibility tree...")
+        nav_result = await browser_navigate(url)
+        print(f"[VERBOSE] Navigation: {nav_result.get('status')}")
+        tree_result = await get_accessibility_tree()
+        if tree_result.get('status') == 'success':
+            print(f"[VERBOSE] Accessibility tree:\n{tree_result.get('tree', '')[:2000]}...")
+        print("-" * 60)
+
+    print("Starting full agentic audit...")
+
+    agent = DarkPatternAgent(
+        model=model,
+        provider=provider,
+        max_steps=10,
+    )
+
+    try:
+        result = await agent.run_audit(url)
+        print_result(result)
+    except Exception as e:
+        print(f"\nError during audit: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def main():
     """Main entry point."""
     # Parse arguments
@@ -196,21 +236,34 @@ def main():
         for name, sim in SIMULATIONS.items():
             expected = sim['expected_pattern'] or 'none (clean)'
             print(f"  {name}: {sim['description']} [expects: {expected}]")
+        print("\nOr provide any URL: python demo.py https://example.com")
         return
     elif "--help" in sys.argv:
         print(__doc__)
         print("\nOptions:")
         print("  --verbose, -v  Show accessibility tree and debug info")
         print("  --list         List available simulations")
+        print("\nURL support:")
+        print("  python demo.py https://example.com  # Run against any URL")
         return
 
-    simulation = args[0] if args else None
+    arg = args[0] if args else None
 
-    # Start local server
+    # Check if argument is a URL
+    if arg and (arg.startswith("http://") or arg.startswith("https://")):
+        try:
+            asyncio.run(run_url_audit(arg, verbose))
+        finally:
+            asyncio.run(browser_cleanup())
+        return
+
+    # Otherwise treat as simulation name
+    simulation = arg
+
+    # Start local server for simulations
     port = 8888
     print(f"Starting local server on port {port}...")
     server = start_server(port)
-
     try:
         if simulation:
             asyncio.run(run_demo(simulation, port, verbose))

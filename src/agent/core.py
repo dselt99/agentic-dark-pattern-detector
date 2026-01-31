@@ -73,133 +73,7 @@ def truncate_to_tokens(text: str, max_tokens: int, suffix: str = "\n... [truncat
     return text[:target_chars] + suffix
 
 
-# Tool definitions for Anthropic's tool use API
-TOOL_DEFINITIONS = [
-    {
-        "name": "browser_reload",
-        "description": "Reloads the current page. Use this to test for False Urgency patterns - if countdown timers reset to their original values after reload, this indicates fake urgency.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "browser_click",
-        "description": "Clicks an element on the page. Use this to test interaction flows like signup vs. cancellation paths (Roach Motel), or to add items to cart (Sneak into Basket).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector for the element to click",
-                },
-            },
-            "required": ["selector"],
-        },
-    },
-    {
-        "name": "get_accessibility_tree",
-        "description": "Returns a semantic YAML representation of the current page structure. Use this after navigation or clicks to see the updated page state.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector to root the tree at. Defaults to 'body'.",
-                },
-                "max_depth": {
-                    "type": "integer",
-                    "description": "Maximum depth to traverse (default 15, max 50). Use higher values (20-30) when investigating nested UI like accordion menus, settings pages, or multi-step cancellation flows where Roach Motel patterns might be hidden.",
-                    "minimum": 1,
-                    "maximum": 50,
-                },
-                "include_hidden": {
-                    "type": "boolean",
-                    "description": "If true, include hidden elements (display:none). Useful for finding pre-checked options or hidden form fields (Sneak into Basket detection).",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "deep_scan_element",
-        "description": "Perform a deep scan of a specific element to find nested dark patterns. Use this when you suspect a Roach Motel pattern (easy signup, hard cancellation) might be hiding cancellation options deep in nested menus, accordions, or modal dialogs.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector for the element to deeply scan (e.g., '#account-settings', '.subscription-panel').",
-                },
-            },
-            "required": ["selector"],
-        },
-    },
-    {
-        "name": "take_screenshot",
-        "description": "Captures visual evidence of the current page or a specific element.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector for element to capture. If omitted, captures full viewport.",
-                },
-                "filename_prefix": {
-                    "type": "string",
-                    "description": "Prefix for saved file (e.g., 'false_urgency_evidence').",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "get_page_url",
-        "description": "Returns the current page URL. Useful for tracking navigation state.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "submit_audit_result",
-        "description": "Submit the final audit result. Call this when you have finished analyzing the page for all dark pattern types and are ready to report your findings.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "findings": {
-                    "type": "array",
-                    "description": "List of detected dark patterns",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "pattern_type": {
-                                "type": "string",
-                                "enum": ["roach_motel", "false_urgency", "confirmshaming", "sneak_into_basket", "forced_continuity"],
-                            },
-                            "confidence_score": {
-                                "type": "number",
-                                "minimum": 0.7,
-                                "maximum": 1.0,
-                            },
-                            "element_selector": {"type": "string"},
-                            "reasoning": {"type": "string"},
-                            "evidence": {"type": "string"},
-                        },
-                        "required": ["pattern_type", "confidence_score", "element_selector", "reasoning", "evidence"],
-                    },
-                },
-                "summary": {
-                    "type": "string",
-                    "description": "Brief summary of the audit findings",
-                },
-            },
-            "required": ["findings", "summary"],
-        },
-    },
-]
+
 
 
 class DarkPatternAgent:
@@ -216,6 +90,7 @@ class DarkPatternAgent:
         model: str = "claude-3-5-sonnet",
         provider: str = "anthropic",
         max_steps: int = 50,
+        tools = None
     ):
         """Initialize the Dark Pattern Agent.
 
@@ -231,6 +106,7 @@ class DarkPatternAgent:
         self.max_steps = max_steps
         self.skills = self._load_skill("skills/detect-manipulation.md")
         self.schema = get_audit_result_schema()
+        self.tools = tools
 
         # State management
         self.visited_urls: Set[str] = set()
@@ -311,7 +187,7 @@ class DarkPatternAgent:
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
-    def _check_robots_compliance(self, url: str, fail_open: bool = False) -> bool:
+    def _check_robots_compliance(self, url: str, fail_open: bool = True) -> bool:
         """Check if URL is allowed by robots.txt.
 
         Uses fail-closed approach by default for safety.
@@ -374,7 +250,7 @@ class DarkPatternAgent:
 
         last_exception = None
         base_delay = 1.0
-
+        # print(messages)
         for attempt in range(max_retries + 1):
             try:
                 if self.provider == "anthropic":
@@ -383,7 +259,7 @@ class DarkPatternAgent:
                         max_tokens=4096,
                         system=system_prompt,
                         messages=messages,
-                        tools=TOOL_DEFINITIONS,
+                        tools=self.tools,
                         temperature=0.1,
                     )
                     return response
@@ -457,6 +333,9 @@ class DarkPatternAgent:
         self.screenshot_paths.clear()
         self.detected_findings.clear()
         self._nudged = False  # Reset nudge flag
+
+        if self.tools is None:
+            self.tools = await self.client.list_tools()
 
         # 1. Respect Robots.txt (Responsible Auditor)
         if not self._check_robots_compliance(url):
@@ -540,7 +419,7 @@ class DarkPatternAgent:
 
         # Estimate tokens and truncate if needed
         tree_tokens = estimate_tokens(initial_tree)
-        max_tree_tokens = 50000  # Leave room for conversation history
+        max_tree_tokens = 15000  # Reduced to avoid rate limits with conversation history
         if tree_tokens > max_tree_tokens:
             import logging
             logger = logging.getLogger(__name__)
@@ -642,6 +521,7 @@ Do not end your response without calling submit_audit_result.""",
             try:
                 # Call LLM with tools
                 response = await self._call_llm_with_tools(messages, system_prompt)
+                print(f"[DEBUG] Response blocks: {[b.type for b in response.content]}")
 
                 # Process response content
                 assistant_content = []
@@ -725,9 +605,13 @@ Do not end your response without calling submit_audit_result.""",
 
                 # Process each tool call
                 tool_results = []
+                print(f"[DEBUG] Step {step}: Processing {len(tool_calls_to_process)} tool calls: {[tc.name for tc in tool_calls_to_process]}")
                 for tool_call in tool_calls_to_process:
                     tool_name = tool_call.name
                     tool_input = tool_call.input
+                    print(f"[DEBUG] Executing tool: {tool_name}")
+                    if tool_name == "submit_audit_result":
+                        print(f"[DEBUG] submit_audit_result called with: {json.dumps(tool_input, indent=2)[:500]}")
 
                     # Execute the tool
                     result = await self._execute_tool(tool_name, tool_input)
@@ -959,6 +843,10 @@ Provide your audit result as a JSON object matching the AuditResult schema."""
         Returns:
             Combined AuditResult from all steps.
         """
+        print(f"[DEBUG] _synthesize_final_result called with {len(self.detected_findings)} detected_findings")
+        if self.detected_findings:
+            print(f"[DEBUG] Findings: {json.dumps(self.detected_findings, indent=2)[:1000]}")
+
         all_findings: List[DetectedPattern] = []
         seen_selectors: Set[str] = set()
 

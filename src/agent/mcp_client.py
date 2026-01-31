@@ -153,6 +153,11 @@ class MCPClient:
         self._base_delay = base_delay
         self._max_delay = max_delay
 
+    async def list_tools(self) -> list[dict[str, Any]]:
+        """Query MCP server for available tools."""
+        from src.mcp.server import list_tools
+        return await list_tools()
+
     async def start_session(self) -> str:
         """Start a new isolated browser session.
 

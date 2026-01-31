@@ -12,13 +12,13 @@ import uuid
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 import yaml
-
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 from mcp.server.fastmcp import FastMCP
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +26,134 @@ logger = logging.getLogger(__name__)
 
 # Initialize MCP server
 mcp = FastMCP("Dark Pattern Hunter - Browser Automation")
+
+# Tool definitions for Anthropic's tool use API
+TOOL_DEFINITIONS = [
+    {
+        "name": "browser_reload",
+        "description": "Reloads the current page. Use this to test for False Urgency patterns - if countdown timers reset to their original values after reload, this indicates fake urgency.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "browser_click",
+        "description": "Clicks an element on the page. Use this to test interaction flows like signup vs. cancellation paths (Roach Motel), or to add items to cart (Sneak into Basket).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector for the element to click",
+                },
+            },
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "get_accessibility_tree",
+        "description": "Returns a semantic YAML representation of the current page structure. Use this after navigation or clicks to see the updated page state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector to root the tree at. Defaults to 'body'.",
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "Maximum depth to traverse (default 15, max 50). Use higher values (20-30) when investigating nested UI like accordion menus, settings pages, or multi-step cancellation flows where Roach Motel patterns might be hidden.",
+                    "minimum": 1,
+                    "maximum": 50,
+                },
+                "include_hidden": {
+                    "type": "boolean",
+                    "description": "If true, include hidden elements (display:none). Useful for finding pre-checked options or hidden form fields (Sneak into Basket detection).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "deep_scan_element",
+        "description": "Perform a deep scan of a specific element to find nested dark patterns. Use this when you suspect a Roach Motel pattern (easy signup, hard cancellation) might be hiding cancellation options deep in nested menus, accordions, or modal dialogs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector for the element to deeply scan (e.g., '#account-settings', '.subscription-panel').",
+                },
+            },
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "take_screenshot",
+        "description": "Captures visual evidence of the current page or a specific element.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector for element to capture. If omitted, captures full viewport.",
+                },
+                "filename_prefix": {
+                    "type": "string",
+                    "description": "Prefix for saved file (e.g., 'false_urgency_evidence').",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_page_url",
+        "description": "Returns the current page URL. Useful for tracking navigation state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "submit_audit_result",
+        "description": "Submit the final audit result. Call this when you have finished analyzing the page for all dark pattern types and are ready to report your findings.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "description": "List of detected dark patterns",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "pattern_type": {
+                                "type": "string",
+                                "enum": ["roach_motel", "false_urgency", "confirmshaming", "sneak_into_basket", "forced_continuity"],
+                            },
+                            "confidence_score": {
+                                "type": "number",
+                                "minimum": 0.7,
+                                "maximum": 1.0,
+                            },
+                            "element_selector": {"type": "string"},
+                            "reasoning": {"type": "string"},
+                            "evidence": {"type": "string"},
+                        },
+                        "required": ["pattern_type", "confidence_score", "element_selector", "reasoning", "evidence"],
+                    },
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Brief summary of the audit findings",
+                },
+            },
+            "required": ["findings", "summary"],
+        },
+    },
+]
 
 
 class BrowserSession:
@@ -144,6 +272,9 @@ class SessionManager:
 # Global session manager
 _session_manager = SessionManager()
 
+async def list_tools() -> list[dict[str, Any]]:
+    """Return available tool schemas (MCP tools/list)."""
+    return TOOL_DEFINITIONS
 
 async def get_browser() -> tuple[Browser, BrowserContext, Page]:
     """Get browser from current session, creating one if needed."""
