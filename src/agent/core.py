@@ -20,6 +20,7 @@ from ..schemas.utils import (
     inject_schema_into_system_prompt,
 )
 from .mcp_client import MCPClient
+from .security import sanitize_untrusted_content, armor_prompt, log_security_event
 from .ledger import JourneyLedger
 from .planner import Planner
 from .actor import Actor
@@ -341,6 +342,22 @@ class DarkPatternAgent:
         Returns:
             Formatted prompt string.
         """
+        # Sanitize untrusted DOM content
+        sanitization_result = sanitize_untrusted_content(tree_yaml)
+        tree_yaml = sanitization_result.sanitized_content
+
+        if sanitization_result.injection_detected:
+            log_security_event(
+                "INJECTION_ATTEMPT",
+                {
+                    "url": url,
+                    "step": step,
+                    "warnings": sanitization_result.warnings,
+                    "removed_patterns": sanitization_result.removed_patterns,
+                },
+                severity="WARNING",
+            )
+
         memory_summary = ""
         if self.memory:
             memory_summary = f"\n\nPrevious observations ({len(self.memory)} steps):\n"
@@ -633,14 +650,14 @@ Provide your audit result as a JSON object matching the AuditResult schema."""
         # Completion status
         if hit_max_steps and not all_tasks_completed:
             summary_parts.append(
-                f"\n⚠️  Audit reached maximum step limit ({max_steps}) before completing all tasks. "
+                f"\n[!] Audit reached maximum step limit ({max_steps}) before completing all tasks. "
                 f"Some analysis may be incomplete."
             )
         elif all_tasks_completed:
-            summary_parts.append("\n✓ All planned tasks completed successfully.")
+            summary_parts.append("\n[OK] All planned tasks completed successfully.")
         else:
             summary_parts.append(
-                f"\n⚠️  Audit completed but {len(task_queue) - len(completed_tasks)} task(s) "
+                f"\n[!] Audit completed but {len(task_queue) - len(completed_tasks)} task(s) "
                 f"were not completed."
             )
         

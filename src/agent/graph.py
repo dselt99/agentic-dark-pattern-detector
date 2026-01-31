@@ -20,6 +20,7 @@ from .debug import (
     reset_debug_state,
     DEBUG_ENABLED,
 )
+from .security import sanitize_untrusted_content, log_security_event
 from ..schemas import AuditFlag, InteractionSnapshot, CartItem, ConsentStatus
 
 
@@ -307,7 +308,19 @@ async def nav_actor_node(state: AgentState) -> AgentState:
                 # Get accessibility tree
                 tree_result = await mcp_client.call_tool("get_accessibility_tree")
                 if tree_result.get("status") == "success":
-                    browser_state["dom_tree"] = tree_result.get("tree", "")
+                    raw_tree = tree_result.get("tree", "")
+                    # Sanitize untrusted DOM content
+                    sanitization = sanitize_untrusted_content(raw_tree)
+                    browser_state["dom_tree"] = sanitization.sanitized_content
+                    if sanitization.injection_detected:
+                        log_security_event(
+                            "INJECTION_ATTEMPT",
+                            {
+                                "url": browser_state.get("url"),
+                                "warnings": sanitization.warnings,
+                            },
+                            severity="WARNING",
+                        )
                     current_task["completed"] = True
                 else:
                     current_task["failed"] = True

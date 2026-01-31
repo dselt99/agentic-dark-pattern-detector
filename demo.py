@@ -7,6 +7,7 @@ Usage:
     python demo.py                    # Run all demos
     python demo.py false_urgency      # Run specific demo
     python demo.py --list             # List available demos
+    python demo.py --dynamic URL      # Run Phase 2 dynamic audit on URL
 """
 
 import asyncio
@@ -225,11 +226,74 @@ async def run_url_audit(url: str, verbose: bool = False):
         traceback.print_exc()
 
 
+async def run_dynamic_audit(url: str, user_query: str = None, verbose: bool = False):
+    """Run Phase 2 dynamic audit using LangGraph and Planner-Actor-Auditor.
+
+    This mode supports multi-step journeys, state tracking, and temporal
+    pattern detection (like drip pricing and sneak-into-basket).
+    """
+    print_header("DARK PATTERN HUNTER - PHASE 2 DYNAMIC AUDIT")
+    print(f"Target URL: {url}")
+    if user_query:
+        print(f"User Query: {user_query}")
+    print("-" * 60)
+
+    # Initialize agent
+    model = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")
+    provider = os.getenv("LLM_PROVIDER", "anthropic")
+
+    print(f"Using model: {model} ({provider})")
+    print("Mode: Phase 2 (LangGraph + Planner-Actor-Auditor)")
+    print("-" * 60)
+
+    # Enable debug logging if verbose
+    if verbose:
+        os.environ["DEBUG_ENABLED"] = "true"
+        print("[VERBOSE] Debug logging enabled")
+
+    print("Starting dynamic audit...")
+
+    agent = DarkPatternAgent(
+        model=model,
+        provider=provider,
+        max_steps=25,  # More steps for dynamic exploration
+    )
+
+    try:
+        query = user_query or "Audit this website for dark patterns"
+        result = await agent.run_dynamic_audit(url, user_query=query)
+        print_result(result)
+    except Exception as e:
+        print(f"\nError during audit: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def main():
     """Main entry point."""
     # Parse arguments
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    dynamic = "--dynamic" in sys.argv or "-d" in sys.argv
+
+    # Parse --query argument
+    user_query = None
+    for i, arg in enumerate(sys.argv):
+        if arg in ("--query", "-q") and i + 1 < len(sys.argv):
+            user_query = sys.argv[i + 1]
+            break
+
+    # Filter out flags and query value
+    args = []
+    skip_next = False
+    for i, a in enumerate(sys.argv[1:]):
+        if skip_next:
+            skip_next = False
+            continue
+        if a in ("--query", "-q"):
+            skip_next = True
+            continue
+        if not a.startswith("-"):
+            args.append(a)
 
     if "--list" in sys.argv:
         print("Available simulations:")
@@ -237,24 +301,43 @@ def main():
             expected = sim['expected_pattern'] or 'none (clean)'
             print(f"  {name}: {sim['description']} [expects: {expected}]")
         print("\nOr provide any URL: python demo.py https://example.com")
+        print("\nPhase 2 Dynamic Audit:")
+        print("  python demo.py --dynamic https://example.com")
         return
     elif "--help" in sys.argv:
         print(__doc__)
         print("\nOptions:")
         print("  --verbose, -v  Show accessibility tree and debug info")
+        print("  --dynamic, -d  Use Phase 2 dynamic audit (LangGraph)")
+        print("  --query, -q    User query for Phase 2 audit (use with --dynamic)")
         print("  --list         List available simulations")
         print("\nURL support:")
-        print("  python demo.py https://example.com  # Run against any URL")
+        print("  python demo.py https://example.com              # Phase 1 static audit")
+        print("  python demo.py --dynamic https://example.com    # Phase 2 dynamic audit")
+        print("  python demo.py --dynamic https://ryanair.com --query \"Book a flight to Dublin\"")
         return
 
     arg = args[0] if args else None
 
     # Check if argument is a URL
     if arg and (arg.startswith("http://") or arg.startswith("https://")):
+        server = None
         try:
-            asyncio.run(run_url_audit(arg, verbose))
+            # Start local server if it's a localhost URL
+            if "localhost:8888" in arg or "127.0.0.1:8888" in arg:
+                port = 8888
+                print(f"Starting local server on port {port}...")
+                server = start_server(port)
+
+            if dynamic:
+                asyncio.run(run_dynamic_audit(arg, user_query=user_query, verbose=verbose))
+            else:
+                asyncio.run(run_url_audit(arg, verbose))
         finally:
             asyncio.run(browser_cleanup())
+            if server:
+                server.shutdown()
+                print("\nServer stopped.")
         return
 
     # Otherwise treat as simulation name
