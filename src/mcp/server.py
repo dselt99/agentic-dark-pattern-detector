@@ -9,6 +9,7 @@ import os
 import re
 import time
 import uuid
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -972,6 +973,384 @@ async def maps_topology() -> dict:
         return {
             "status": "error",
             "message": f"Error mapping topology: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def browser_type(selector: str, text: str) -> dict:
+    """Types text into an input field or textarea.
+
+    Args:
+        selector: CSS selector for the input element.
+        text: Text to type.
+
+    Returns:
+        Dictionary with status and message.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        element = await page.query_selector(selector)
+        if not element:
+            return {
+                "status": "error",
+                "message": f"Element not found: {selector}",
+            }
+
+        await element.fill(text)
+
+        return {
+            "status": "success",
+            "message": f"Typed '{text[:50]}...' into {selector}",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error typing text: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def browser_scroll(direction: str = "down", amount: int = 500) -> dict:
+    """Scrolls the viewport in a specified direction.
+
+    Args:
+        direction: Scroll direction ("up", "down", "left", "right").
+        amount: Pixels to scroll (default 500).
+
+    Returns:
+        Dictionary with status and message.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        if direction == "down":
+            await page.evaluate(f"window.scrollBy(0, {amount})")
+        elif direction == "up":
+            await page.evaluate(f"window.scrollBy(0, -{amount})")
+        elif direction == "left":
+            await page.evaluate(f"window.scrollBy(-{amount}, 0)")
+        elif direction == "right":
+            await page.evaluate(f"window.scrollBy({amount}, 0)")
+        else:
+            return {
+                "status": "error",
+                "message": f"Invalid direction: {direction}. Use 'up', 'down', 'left', or 'right'",
+            }
+
+        await asyncio.sleep(0.5)  # Brief pause after scroll
+
+        return {
+            "status": "success",
+            "message": f"Scrolled {direction} by {amount} pixels",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error scrolling: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def browser_wait_for_stability(
+    network_idle_timeout: float = 5.0,
+    visual_stability_threshold: float = 0.01,
+) -> dict:
+    """Wait for page stability (network idle and visual stability).
+
+    Args:
+        network_idle_timeout: Seconds to wait for network idle.
+        visual_stability_threshold: Pixel difference threshold for visual stability.
+
+    Returns:
+        Dictionary with stability results.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        # Wait for network idle
+        network_idle = False
+        try:
+            await page.wait_for_load_state(
+                "networkidle", timeout=int(network_idle_timeout * 1000)
+            )
+            network_idle = True
+        except Exception:
+            pass
+
+        # Check visual stability (simplified - would use PIL/OpenCV in full implementation)
+        visual_stable = False
+        pixel_diff_ratio = None
+
+        try:
+            # Take two screenshots with small delay
+            screenshot1 = await page.screenshot()
+            await asyncio.sleep(0.5)
+            screenshot2 = await page.screenshot()
+
+            # Simple check: if screenshots are identical, visually stable
+            # Full implementation would use PIL/OpenCV for pixel diff
+            visual_stable = screenshot1 == screenshot2
+            pixel_diff_ratio = 0.0 if visual_stable else 1.0
+        except Exception:
+            pass
+
+        return {
+            "status": "success",
+            "network_idle": network_idle,
+            "visual_stable": visual_stable,
+            "pixel_diff_ratio": pixel_diff_ratio,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error waiting for stability: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def get_cart_state() -> dict:
+    """Parse shopping cart/basket state from the current page.
+
+    Returns:
+        Dictionary with cart items and total.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        cart_script = """
+        () => {
+            const items = [];
+            
+            // Common cart selectors
+            const cartSelectors = [
+                '.cart-item',
+                '.basket-item',
+                '[data-cart-item]',
+                '.product-item',
+                'tr[data-item]'
+            ];
+            
+            let cartContainer = null;
+            for (const selector of cartSelectors) {
+                cartContainer = document.querySelector(selector)?.closest('.cart, .basket, [data-cart], table');
+                if (cartContainer) break;
+            }
+            
+            if (!cartContainer) {
+                // Try to find any element with "cart" or "basket" in class/id
+                cartContainer = document.querySelector('[class*="cart"], [class*="basket"], [id*="cart"], [id*="basket"]');
+            }
+            
+            if (cartContainer) {
+                const itemElements = cartContainer.querySelectorAll('[data-item], .item, tr, li');
+                
+                itemElements.forEach((el, index) => {
+                    const nameEl = el.querySelector('.name, .product-name, [data-name], h3, h4, .title');
+                    const priceEl = el.querySelector('.price, [data-price], .amount, .cost');
+                    const qtyEl = el.querySelector('.quantity, [data-quantity], input[type="number"]');
+                    
+                    const name = nameEl?.textContent?.trim() || `Item ${index + 1}`;
+                    const priceText = priceEl?.textContent?.trim() || '0';
+                    const price = parseFloat(priceText.replace(/[^0-9.]/g, '')) || 0;
+                    const quantity = parseInt(qtyEl?.value || qtyEl?.textContent?.trim() || '1') || 1;
+                    
+                    if (name && price > 0) {
+                        items.push({
+                            name: name.substring(0, 100),
+                            price: price,
+                            quantity: quantity,
+                            selector: el.id ? `#${el.id}` : null
+                        });
+                    }
+                });
+            }
+            
+            // Get total
+            const totalEl = document.querySelector('.total, .cart-total, [data-total], .grand-total, .subtotal');
+            const totalText = totalEl?.textContent?.trim() || '0';
+            const total = parseFloat(totalText.replace(/[^0-9.]/g, '')) || 0;
+            
+            return {
+                items: items,
+                total: total,
+                item_count: items.length
+            };
+        }
+        """
+
+        cart_data = await page.evaluate(cart_script)
+
+        return {
+            "status": "success",
+            "cart": cart_data,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error getting cart state: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def get_price_breakdown() -> dict:
+    """Extract price breakdown from checkout/payment page.
+
+    Returns:
+        Dictionary with price components (subtotal, tax, shipping, fees, total).
+    """
+    try:
+        _, _, page = await get_browser()
+
+        price_script = """
+        () => {
+            const breakdown = {
+                subtotal: 0,
+                tax: 0,
+                vat: 0,
+                shipping: 0,
+                service_fee: 0,
+                processing_fee: 0,
+                convenience_fee: 0,
+                cleaning_fee: 0,
+                total: 0
+            };
+            
+            // Common price breakdown selectors
+            const priceLabels = {
+                'subtotal': ['.subtotal', '[data-subtotal]', '.item-total'],
+                'tax': ['.tax', '[data-tax]', '.sales-tax', '.vat'],
+                'vat': ['.vat', '[data-vat]'],
+                'shipping': ['.shipping', '[data-shipping]', '.delivery'],
+                'service_fee': ['.service-fee', '[data-service-fee]', '.fee'],
+                'processing_fee': ['.processing-fee', '[data-processing-fee]'],
+                'convenience_fee': ['.convenience-fee', '[data-convenience-fee]'],
+                'cleaning_fee': ['.cleaning-fee', '[data-cleaning-fee]'],
+                'total': ['.total', '.grand-total', '[data-total]', '.final-total']
+            };
+            
+            for (const [key, selectors] of Object.entries(priceLabels)) {
+                for (const selector of selectors) {
+                    const el = document.querySelector(selector);
+                    if (el) {
+                        const text = el.textContent?.trim() || '';
+                        const value = parseFloat(text.replace(/[^0-9.]/g, '')) || 0;
+                        if (value > 0) {
+                            breakdown[key] = value;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            return breakdown;
+        }
+        """
+
+        price_data = await page.evaluate(price_script)
+
+        return {
+            "status": "success",
+            "price_breakdown": price_data,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error getting price breakdown: {str(e)}",
+        }
+
+
+@mcp.tool()
+async def get_interactive_elements_marked() -> dict:
+    """Get all interactive elements with numeric mark IDs (Set-of-Marks).
+
+    Returns:
+        Dictionary mapping mark IDs to element information.
+    """
+    try:
+        _, _, page = await get_browser()
+
+        marking_script = """
+        () => {
+            const markedElements = {};
+            let markId = 1;
+            
+            // Find all interactive elements
+            const selectors = [
+                'a[href]',
+                'button',
+                'input[type="button"]',
+                'input[type="submit"]',
+                'input[type="text"]',
+                'input[type="email"]',
+                'input[type="checkbox"]',
+                'input[type="radio"]',
+                'select',
+                'textarea',
+                '[role="button"]',
+                '[role="link"]',
+                '[onclick]',
+                '[tabindex]:not([tabindex="-1"])'
+            ];
+            
+            const allElements = new Set();
+            selectors.forEach(selector => {
+                document.querySelectorAll(selector).forEach(el => {
+                    if (el.offsetParent !== null) { // Only visible elements
+                        allElements.add(el);
+                    }
+                });
+            });
+            
+            allElements.forEach(element => {
+                const rect = element.getBoundingClientRect();
+                const text = element.textContent?.trim() || element.value || element.alt || '';
+                const tag = element.tagName.toLowerCase();
+                const type = element.type || tag;
+                
+                // Generate selector
+                let selector = null;
+                if (element.id) {
+                    selector = `#${element.id}`;
+                } else if (element.className && typeof element.className === 'string') {
+                    const firstClass = element.className.split(' ')[0];
+                    selector = `.${firstClass}`;
+                } else {
+                    selector = tag;
+                }
+                
+                markedElements[markId.toString()] = {
+                    mark_id: markId,
+                    selector: selector,
+                    tag: tag,
+                    type: type,
+                    text: text.substring(0, 100),
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2),
+                    visible: true
+                };
+                
+                markId++;
+            });
+            
+            return {
+                marked_elements: markedElements,
+                total_marks: markId - 1
+            };
+        }
+        """
+
+        marked_data = await page.evaluate(marking_script)
+
+        return {
+            "status": "success",
+            "marked_elements": marked_data.get("marked_elements", {}),
+            "total_marks": marked_data.get("total_marks", 0),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error marking interactive elements: {str(e)}",
         }
 
 

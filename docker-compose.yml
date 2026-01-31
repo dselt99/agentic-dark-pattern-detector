@@ -17,7 +17,13 @@ services:
              tail -f /dev/null"
     networks:
       - dark-pattern-network
+    # Network isolation: Only allow egress to target domains and LLM APIs
+    # Note: Full egress filtering requires iptables rules or network policies
+    # This is a placeholder - actual filtering should be implemented at the network level
 
 networks:
   dark-pattern-network:
     driver: bridge
+    # Egress filtering should be configured here or via iptables
+    # Allowed: Target domain, OpenAI/Anthropic APIs, Local control plane
+    # Blocked: Everything else

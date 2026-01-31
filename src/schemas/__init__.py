@@ -8,6 +8,11 @@ from .schemas import (
     PatternType,
     DetectedPattern,
     AuditResult,
+    CartItem,
+    ConsentStatus,
+    InteractionSnapshot,
+    JourneyLedger as JourneyLedgerSchema,
+    AuditFlag,
 )
 
 from .utils import (
@@ -26,6 +31,11 @@ __all__ = [
     "PatternType",
     "DetectedPattern",
     "AuditResult",
+    "CartItem",
+    "ConsentStatus",
+    "InteractionSnapshot",
+    "JourneyLedgerSchema",
+    "AuditFlag",
     # Utilities
     "get_json_schema",
     "get_audit_result_schema",

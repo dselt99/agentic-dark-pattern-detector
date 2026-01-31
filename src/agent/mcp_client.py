@@ -21,6 +21,12 @@ from ..mcp.server import (
     get_page_url,
     take_screenshot,
     maps_topology,
+    browser_type,
+    browser_scroll,
+    browser_wait_for_stability,
+    get_cart_state,
+    get_price_breakdown,
+    get_interactive_elements_marked,
     get_session_manager,
     cleanup_session,
 )
@@ -212,6 +218,12 @@ class MCPClient:
             "get_page_url": get_page_url,
             "take_screenshot": take_screenshot,
             "maps_topology": maps_topology,
+            "browser_type": browser_type,
+            "browser_scroll": browser_scroll,
+            "browser_wait_for_stability": browser_wait_for_stability,
+            "get_cart_state": get_cart_state,
+            "get_price_breakdown": get_price_breakdown,
+            "get_interactive_elements_marked": get_interactive_elements_marked,
         }
 
         if tool_name not in tool_map:
