@@ -144,10 +144,9 @@ What action should I take to accomplish this task? Be specific and use mark IDs 
         # Call LLM with retry logic for rate limits
         action = await self._call_llm_with_retry(system_prompt, user_prompt)
 
-        # Execute the action via MCP client
-        if self.mcp_client and action.get("action_type") != "observe":
-            result = await self._execute_action(action, marked_elements)
-            action["execution_result"] = result
+        # NOTE: Do NOT execute actions here. The graph (NAV_ACTOR node) handles
+        # all action execution so it can check navigation, detect new tabs, and
+        # properly control task completion based on actual results.
 
         # Determine task completion based on task type and action taken
         # "observe" only completes "observe" tasks, NOT interact/type/dismiss tasks

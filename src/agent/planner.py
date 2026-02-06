@@ -49,7 +49,7 @@ class Planner:
         Returns:
             List of task dictionaries.
         """
-        system_prompt = """You are a strategic planner for a web automation agent.
+        system_prompt = """You are a strategic planner for a web automation agent that detects dark patterns on websites.
 Your task is to decompose high-level user goals into a sequence of executable sub-tasks.
 
 Each task should be:
@@ -64,21 +64,54 @@ Return a JSON array of tasks, each with:
 - target: (Optional) Specific element description or text to interact with
 - dependencies: List of task IDs that must complete first (optional)
 
-IMPORTANT for False Urgency detection:
-- If the page contains countdown timers, scarcity claims, or urgency messaging, include a "reload" task
-- Pattern: observe -> reload -> observe (to compare timer states)
+IMPORTANT RULES:
 
-IMPORTANT for Pop up messages:
-- If you suspect popups (e.g. cookie banners), include a 'dismiss' task early in the chain.
+1. Keep plans SHORT and action-focused. Maximum 10-12 tasks. Prefer interact/click tasks over observe tasks.
+   Do NOT generate multiple observe tasks in a row — one observe is enough to assess page state.
 
-Example for "Buy the cheapest item":
+2. Dismiss tasks: Include at most ONE dismiss task early in the plan. If no popup is found, the agent will
+   move on automatically. Do NOT plan elaborate multi-step popup detection sequences.
+
+3. False Urgency detection: If the page might have countdown timers or urgency messaging, include ONE
+   "reload" task followed by ONE "observe" to compare timer states.
+
+4. PURCHASE / CHECKOUT FLOW: When the user goal involves buying, purchasing, shopping, booking, or
+   subscribing, you MUST plan the FULL end-to-end journey through checkout:
+   a) Find the product/service (search, browse, or navigate to it)
+   b) Click on the item to view its details
+   c) Select required options (size, color, dates, quantity, plan tier) AND add to cart / buy — do
+      this in ONE task so it happens on the product page, not as separate tasks
+   d) Proceed through each checkout step (cart → shipping → payment)
+   e) Analyze each checkout step for dark patterns (hidden fees, pre-checked extras, drip pricing,
+      sneak-into-basket items, forced continuity opt-ins, confusing opt-out flows)
+   f) Fill payment info if a form appears (use test card: 4242 4242 4242 4242, exp 12/29, CVC 123)
+   g) Verify the final total matches the originally advertised price
+
+   The checkout flow is where the most important dark patterns hide. Getting to checkout is CRITICAL.
+   Do not stop at the product page — always push through to the final price screen.
+
+5. Each task type implies a specific action:
+   - "navigate": Go to a URL
+   - "interact": Click, type, or submit — requires a concrete action on a specific element
+   - "observe": Look at page state (use sparingly — only when you need to assess before acting)
+   - "analyze": Deep analysis of current page for dark patterns
+   - "verify": Confirm expected state (e.g., price matches, item in cart)
+   - "reload": Refresh page (for false urgency detection)
+   - "dismiss": Close popups/banners
+
+Example for "Buy the cheapest item and look for dark patterns":
 [
-  {"id": 0, "type": "navigate", "goal": "Navigate to product listing page"},
-  {"id": 1, "type": "dismiss", "goal": "Dismiss cookie banner if present"},
-  {"id": 2, "type": "observe", "goal": "Get accessibility tree of product list"},
-  {"id": 3, "type": "interact", "goal": "Sort products by price (ascending)"},
-  {"id": 4, "type": "interact", "goal": "Click on first (cheapest) product"},
-  {"id": 5, "type": "analyze", "goal": "Compare final price to initial price"}
+  {"id": 0, "type": "navigate", "goal": "Navigate to site homepage"},
+  {"id": 1, "type": "dismiss", "goal": "Dismiss any cookie banners or pop-ups"},
+  {"id": 2, "type": "interact", "goal": "Search for the product using the site's search bar"},
+  {"id": 3, "type": "observe", "goal": "Scan search results for urgency claims, scarcity messaging, or misleading pricing"},
+  {"id": 4, "type": "interact", "goal": "Click on a product listing to view its details"},
+  {"id": 5, "type": "analyze", "goal": "Analyze product page for dark patterns: fake urgency, misleading pricing, pre-checked add-ons"},
+  {"id": 6, "type": "interact", "goal": "Select any required product options (size, color, quantity, dates, plan tier, etc.) then click Add to Cart, Buy Now, Book, or equivalent purchase button. If no options are required, click the purchase button directly. If no cart exists, proceed to checkout."},
+  {"id": 7, "type": "interact", "goal": "Proceed to checkout or next step in the purchase flow"},
+  {"id": 8, "type": "analyze", "goal": "Analyze checkout for hidden fees, drip pricing, sneak-into-basket items, forced continuity opt-ins"},
+  {"id": 9, "type": "interact", "goal": "Fill payment form with test card (4242424242424242, exp 12/29, CVC 123) if prompted"},
+  {"id": 10, "type": "verify", "goal": "Verify final total matches advertised price, document any price discrepancies or unexpected charges"}
 ]"""
 
         user_prompt = f"""User Query: {user_query}

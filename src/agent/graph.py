@@ -428,7 +428,11 @@ async def nav_actor_node(state: AgentState) -> AgentState:
             elif action_type == "observe":
                 # Use the shared re-observation helper
                 await _refresh_browser_state(mcp_client, browser_state)
-                current_task["completed"] = True
+                # Auto-complete most tasks on observe (nothing left to do),
+                # but NOT interact/click tasks — those require a verifiable action
+                task_type = current_task.get("type", "observe")
+                if task_type not in ("interact", "click"):
+                    current_task["completed"] = True
                 action_record["result"] = "success"
 
             elif action_type == "click":
@@ -443,9 +447,31 @@ async def nav_actor_node(state: AgentState) -> AgentState:
                             from ..mcp.server import get_browser
                             _, _, page = await get_browser()
                             await wait_strategy.wait_for_stability(page)
-                        current_task["completed"] = True
-                        needs_reobserve = True
-                        action_record["result"] = "success"
+
+                        # Check if the click actually caused navigation
+                        did_navigate = click_result.get("navigated", False)
+                        url_after = click_result.get("url_after", "")
+
+                        if did_navigate and url_after:
+                            browser_state["url"] = url_after
+
+                        # If the task goal implies navigation but click didn't navigate,
+                        # don't mark as completed — let stuck-detection escalate
+                        nav_keywords = ("product", "detail", "listing", "view", "cart", "item", "page", "link", "open", "click")
+                        task_desc = (current_task.get("goal", "") + " " + current_task.get("target", "") + " " + current_task.get("description", "") + " " + current_task.get("action", "")).lower()
+                        expects_navigation = any(kw in task_desc for kw in nav_keywords)
+
+                        if expects_navigation and not did_navigate:
+                            # Click succeeded but didn't navigate — not truly complete
+                            needs_reobserve = True
+                            action_record["result"] = "success_no_nav"
+                            if DEBUG_ENABLED:
+                                from .debug import debug_logger
+                                debug_logger.warning(f"  Click succeeded but no navigation detected (task expects nav). NOT marking complete.")
+                        else:
+                            current_task["completed"] = True
+                            needs_reobserve = True
+                            action_record["result"] = "success"
                     else:
                         current_task["failed"] = True
                         current_task["error"] = click_result.get("message", "Click failed")

@@ -805,16 +805,61 @@ async def browser_click(selector: str) -> dict:
 
         # Get current URL before click
         url_before = page.url
+        context = page.context
+
+        # Track pages before click to detect new-tab navigations
+        pages_before = len(context.pages)
 
         # Click the element
         await element.click()
 
         # Wait for potential navigation or state change
-        await page.wait_for_load_state("networkidle", timeout=5000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass  # timeout is OK — page may not have navigated
 
-        # Get URL after click
+        # Brief wait for new tab popup to register (target="_blank" links)
+        await asyncio.sleep(0.5)
+
+        # Detect new tab opened by target="_blank" links
         url_after = page.url
         navigated = url_before != url_after
+        switched_tab = False
+
+        if not navigated and len(context.pages) > pages_before:
+            # A new tab was opened (target="_blank") — switch to it
+            new_page = context.pages[-1]
+            try:
+                await new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            new_url = new_page.url
+            # Only switch if the new tab has a real URL (not about:blank or empty)
+            if new_url and new_url not in ("about:blank", ""):
+                url_after = new_url
+                navigated = True
+                switched_tab = True
+
+                # Update the session's active page so future calls use the new tab
+                session = _session_manager.get_session()
+                if session:
+                    session.page = new_page
+
+        # Fallback: if clicked an <a> with href but no navigation happened,
+        # navigate directly to the href (handles JS click handlers that
+        # prevent default navigation and target="_blank" that didn't trigger)
+        if not navigated and not switched_tab and element_tag == "a":
+            href = await element.get_attribute("href")
+            if href and not href.startswith("javascript:") and href != "#":
+                try:
+                    await page.goto(href, wait_until="domcontentloaded", timeout=15000)
+                    url_after = page.url
+                    navigated = url_before != url_after
+                    if navigated:
+                        logger.info(f"Fallback navigation to href: {href}")
+                except Exception as e:
+                    logger.warning(f"Fallback href navigation failed: {e}")
 
         return {
             "status": "success",
@@ -822,6 +867,7 @@ async def browser_click(selector: str) -> dict:
             "navigated": navigated,
             "url_before": url_before,
             "url_after": url_after,
+            "switched_tab": switched_tab,
         }
     except Exception as e:
         return {
@@ -1314,9 +1360,12 @@ async def get_interactive_elements_marked() -> dict:
 
         marking_script = """
         () => {
+            // Clean up any stale data-mark-id attributes from previous marking
+            document.querySelectorAll('[data-mark-id]').forEach(el => el.removeAttribute('data-mark-id'));
+
             const markedElements = {};
             let markId = 1;
-            
+
             // Find all interactive elements
             const selectors = [
                 'a[href]',
@@ -1391,7 +1440,12 @@ async def get_interactive_elements_marked() -> dict:
                 } else {
                     selector = tag;
                 }
-                
+
+                // Stamp element with unique data-mark-id attribute
+                element.setAttribute('data-mark-id', markId.toString());
+                // Use data-mark-id as the selector — guaranteed unique
+                selector = `[data-mark-id="${markId}"]`;
+
                 markedElements[markId.toString()] = {
                     mark_id: markId,
                     selector: selector,

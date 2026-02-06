@@ -151,7 +151,10 @@ class SandboxManager:
 
     async def cleanup(self):
         """Cleanup sandbox environment."""
-        await self.payment_interceptor.remove_interception()
+        try:
+            await self.payment_interceptor.remove_interception()
+        except Exception:
+            pass  # Page may have been closed (e.g. tab switch)
 
     def get_identity(self) -> Dict[str, str]:
         """Get synthetic identity for form filling."""
