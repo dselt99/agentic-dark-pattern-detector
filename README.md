@@ -1,40 +1,32 @@
 # Dark Pattern Hunter
 
-An agentic AI system for detecting deceptive design patterns (dark patterns) in web interfaces.
+An agentic AI system that autonomously navigates websites, simulates real user journeys (search, add-to-cart, checkout), and detects deceptive design patterns (dark patterns) in web interfaces.
 
 ## Overview
 
-Dark Pattern Hunter uses a five-pillar architecture to autonomously audit websites for manipulative UI patterns:
+Dark Pattern Hunter uses a **Planner-Actor-Auditor** architecture powered by LangGraph to navigate multi-step user flows end-to-end. It doesn't just scan static pages — it searches for products, clicks through listings, adds items to cart, proceeds through checkout, and audits every step for manipulative UI patterns.
 
-| Pillar | Purpose |
-|--------|---------|
-| **MCP Server** | Playwright-based browser automation tools |
-| **Skills** | Markdown-defined detection rules and heuristics |
-| **Schemas** | Pydantic models for structured LLM output |
-| **Agent** | ReAct-pattern orchestrator for audits |
-| **Evals** | Test simulations with ground truth |
+### What It Detects
 
-## Detected Patterns
-
-- **False Urgency** - Countdown timers that reset, fake scarcity claims
-- **Roach Motel** - Easy signup, difficult cancellation
-- **Confirmshaming** - Guilt-inducing decline options
-- **Sneak into Basket** - Pre-checked add-ons, hidden charges
-- **Forced Continuity** - Hidden auto-renewal terms
+| Pattern | Description | How It Detects |
+|---------|-------------|----------------|
+| **False Urgency** | Countdown timers that reset, fake scarcity claims | Reloads page and compares timer values |
+| **Drip Pricing** | Hidden fees revealed late in checkout | Tracks price from product page through checkout |
+| **Sneak into Basket** | Pre-checked add-ons, unauthorized cart items | Monitors cart state for unexpected additions |
+| **Roach Motel** | Easy signup, difficult cancellation | Compares signup vs cancellation flow complexity |
+| **Forced Continuity** | Hidden auto-renewal terms | Identifies buried subscription terms |
+| **Privacy Zuckering** | Manipulative consent UIs | Analyzes cookie/privacy consent dialogs |
+| **Confirmshaming** | Guilt-inducing decline options | Detects emotional language on opt-out buttons |
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/dselt99/agentic-dark-pattern-detector.git
 cd agentic-dark-pattern-detector
 
-# Install dependencies
 pip install -r requirements.txt
-
-# Install Playwright browser
 playwright install chromium
 ```
 
@@ -43,264 +35,154 @@ playwright install chromium
 Create a `.env` file:
 
 ```env
-LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=your-api-key-here
 LLM_MODEL=claude-haiku-4-5-20251001
 BROWSER_HEADLESS=true
 ```
 
-### Running the Demo
-
-### Phase 1 (Legacy - Single Step)
+### Running an Audit
 
 ```bash
-# Test against local simulation (false urgency pattern)
-python quick_demo.py
+# Audit a site with a purchase flow
+python test_real_site.py https://www.saucedemo.com \
+  --query "Log in, buy the cheapest item, go through checkout, look for dark patterns" \
+  --steps 25 --debug
 
-# Test against other simulations
-python quick_demo.py roach_motel
-python quick_demo.py clean_stock
+# Audit any e-commerce site
+python test_real_site.py https://example-shop.com \
+  --query "Buy a product and look out for dark patterns" \
+  --steps 20
 
-# Test against a live website (Phase 1)
-python -m src.agent https://example.com --phase1
+# Via the CLI entry point
+python -m src.agent https://example.com --query "Audit checkout flow for hidden fees" --steps 30 --debug
 ```
 
-### Phase 2 (Dynamic Multi-Step - Recommended)
-
-Phase 2 uses a Planner-Actor-Auditor architecture with LangGraph for multi-step journey simulation and dynamic pattern detection.
-
-```bash
-# Basic Phase 2 audit (default)
-python -m src.agent https://example.com
-
-# Phase 2 with custom query
-python -m src.agent https://example.com --query "Audit checkout flow for Drip Pricing"
-
-# Phase 2 with more steps for complex sites
-python -m src.agent https://example.com --steps 30
-
-# Phase 2 with graph debugging enabled
-python -m src.agent https://example.com --debug
-python -m src.agent https://example.com --debug-verbose  # Includes state snapshots
-
-# Or use the dedicated test script
-python test_real_site.py https://example.com
-python test_real_site.py https://example.com --query "Test cancellation flow" --steps 30 --verbose
-python test_real_site.py https://example.com --debug  # Enable graph debugging
-```
-
-### Testing Phase 2 Components
-
-```bash
-# Run all Phase 2 tests
-python test_phase2.py
-
-# Run specific test suites
-python test_phase2.py --components    # Component tests only
-python test_phase2.py --basic         # Basic integration test
-python test_phase2.py --roach-motel   # Roach Motel journey test
-python test_phase2.py --mcp-tools     # MCP tools test
-```
-
-## Example Output
+### Example Output
 
 ```
-============================================================
-DARK PATTERN HUNTER - QUICK DEMO
-============================================================
-Target: false_urgency
-URL: http://localhost:8899/evals/simulations/false_urgency.html
-------------------------------------------------------------
-Analyzing with Claude...
-------------------------------------------------------------
-RESULTS
-------------------------------------------------------------
-Summary: One potential dark pattern detected: False Urgency
-Findings: 1
+======================================================================
+AUDIT RESULTS
+======================================================================
+URL: https://www.saucedemo.com
+Findings: 0
 
-1. FALSE_URGENCY
-   Confidence: 0.75
-   Selector: div.timer#timer
-   Reasoning: A countdown timer displaying '05:00' is present with
-   accompanying urgency language ('Limited Time Offer - Act Now!').
-   Evidence: Timer element with text '05:00', urgency-text class
-============================================================
+Execution Summary:
+- Steps executed: 18/25
+- Tasks completed: 16/16
+- Interaction snapshots: 18
+
+[OK] All planned tasks completed successfully.
+
+Key Interactions:
+- Pages visited: 7
+- Click actions: 8
+- Type actions: 5
+
+Analysis Result: After examining 18 interaction points across 7 page(s),
+no dark patterns were identified.
+======================================================================
 ```
 
 ## Architecture
 
-### Phase 1 (Legacy)
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Agent (ReAct Loop)                 │
-│  Observe → Reason → Act → Observe → ... → Report        │
-└─────────────────────────────────────────────────────────┘
-          │                              │
-          ▼                              ▼
-┌──────────────────┐          ┌──────────────────────────┐
-│   MCP Server     │          │   Skills (Markdown)      │
-│  - navigate      │          │  - Pattern definitions   │
-│  - get_tree      │          │  - Detection heuristics  │
-│  - screenshot    │          │  - Negative constraints  │
-└──────────────────┘          └──────────────────────────┘
-          │                              │
-          ▼                              ▼
-┌──────────────────┐          ┌──────────────────────────┐
-│   Playwright     │          │   Pydantic Schemas       │
-│   (Browser)      │          │   (Structured Output)    │
-└──────────────────┘          └──────────────────────────┘
-```
-
-### Phase 2 (Dynamic Multi-Step)
-```
-┌─────────────────────────────────────────────────────────┐
-│                    LangGraph State Machine                │
-│  PLAN → ACT → AUDIT → EVAL → PLAN → ... → COMPLETE      │
-└─────────────────────────────────────────────────────────┘
-          │         │         │
-          ▼         ▼         ▼
-    ┌─────────┐ ┌──────┐ ┌─────────┐
-    │ Planner │ │Actor │ │ Auditor │
-    │(Strategy)│ │(Exec)│ │(Observe)│
-    └─────────┘ └──────┘ └─────────┘
-          │         │         │
-          └─────────┴─────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                   LangGraph State Machine                   │
+│  PLAN → ACT → AUDIT → EVAL → (loop) → COMPLETE             │
+└─────────────────────────────────────────────────────────────┘
+        │           │           │
+        ▼           ▼           ▼
+  ┌──────────┐ ┌─────────┐ ┌──────────┐
+  │ Planner  │ │  Actor  │ │ Auditor  │
+  │ LLM goal │ │ LLM     │ │ Pattern  │
+  │ decomp.  │ │ actions │ │ detectors│
+  └──────────┘ └─────────┘ └──────────┘
+        │           │           │
+        └───────────┴───────────┘
                     │
-          ┌─────────┴─────────┐
-          ▼                   ▼
-    ┌──────────┐      ┌──────────────┐
-    │Journey   │      │  Detectors   │
-    │Ledger    │      │  (Modular)   │
-    │(Memory)  │      └──────────────┘
-    └──────────┘
+        ┌───────────┴───────────┐
+        ▼                       ▼
+  ┌───────────┐          ┌────────────┐
+  │ Journey   │          │ MCP Server │
+  │ Ledger    │          │ (Playwright│
+  │ (Memory)  │          │  Browser)  │
+  └───────────┘          └────────────┘
 ```
 
-**Phase 2 Features:**
-- **Planner**: Decomposes goals into actionable tasks
-- **Actor**: Executes browser interactions (click, type, scroll, navigate)
-- **Auditor**: Observes state changes and detects patterns in real-time
-- **Journey Ledger**: Tracks interaction history for stateful pattern detection
-- **Modular Detectors**: Specialized modules for each dark pattern type
-- **Sandboxing**: Payment interception and synthetic identity for safe testing
+### How It Works
 
-## Project Structure
+1. **Planner** decomposes the user goal into 10-12 actionable tasks (navigate, search, click, add-to-cart, checkout, verify)
+2. **Actor** uses Claude to decide which browser action to take based on the current DOM and marked interactive elements
+3. **Auditor** runs pattern detectors after each action, checking for dark patterns in the current page state
+4. **State Evaluator** decides whether to advance to the next task, re-observe, replan, or escalate
+5. **Journey Ledger** tracks the full interaction history for stateful detection (e.g., price changes across pages)
 
+### Key Components
+
+| File | Purpose |
+|------|---------|
+| `src/agent/graph.py` | LangGraph state machine with 7 nodes (PLAN_GENESIS, NAV_ACTOR, DOM_AUDITOR, STATE_EVAL, SAFE_GUARD, WAIT_AND_RETRY, HUMAN_INTERVENTION) |
+| `src/agent/planner.py` | LLM-powered goal decomposition with checkout-flow awareness |
+| `src/agent/actor.py` | LLM-powered action selection from DOM + marked elements |
+| `src/agent/auditor.py` | Modular pattern detectors (false urgency, drip pricing, etc.) |
+| `src/mcp/server.py` | Playwright browser tools (click, type, navigate, screenshot, accessibility tree) |
+| `src/agent/ledger.py` | Episodic memory tracking interaction history |
+| `src/agent/checkpoints.py` | JSON checkpoint save/load for debugging |
+
+### Browser Automation Features
+
+- **Set-of-Marks**: Interactive elements are stamped with unique `data-mark-id` attributes for reliable targeting
+- **New tab detection**: Handles `target="_blank"` links by detecting new tabs and switching context
+- **Link click fallback**: If a JS click handler prevents navigation on `<a>` elements, falls back to direct `page.goto(href)`
+- **Stuck detection**: Tiered escalation — 3 attempts re-observe, 5 replan, 8 force-complete
+- **DOM refresh**: Automatic DOM invalidation and re-fetch after every state-changing action
+
+### Planner Checkout Flow
+
+When the user goal involves buying, shopping, booking, or subscribing, the planner generates the full end-to-end journey:
+
+1. Navigate to site
+2. Dismiss popups
+3. Search for product
+4. Click product listing
+5. Analyze product page for dark patterns
+6. Select options (size/color/etc.) + add to cart *(combined in one task)*
+7. Proceed to checkout
+8. Analyze checkout for hidden fees, drip pricing, sneak-into-basket
+9. Fill payment form (test card: `4242 4242 4242 4242`)
+10. Verify final total matches advertised price
+
+## Testing
+
+```bash
+# Phase 2 component tests
+python test_phase2.py
+python test_phase2.py --components    # Component tests only
+python test_phase2.py --basic         # Basic integration test
+
+# Phase 1 legacy demo (single-step analysis)
+python quick_demo.py                  # False urgency simulation
+python quick_demo.py roach_motel      # Roach motel simulation
 ```
-├── src/
-│   ├── agent/
-│   │   ├── core.py          # ReAct loop orchestrator
-│   │   ├── mcp_client.py    # Tool calling wrapper
-│   │   └── __main__.py      # CLI entry point
-│   ├── mcp/
-│   │   └── server.py        # Browser automation tools
-│   └── schemas/
-│       ├── schemas.py       # Pydantic models
-│       └── utils.py         # Schema injection utilities
-├── skills/
-│   └── detect-manipulation.md   # Detection rules
-├── evals/
-│   ├── simulations/         # Test HTML files
-│   └── run.py               # Evaluation framework
-├── quick_demo.py            # Simple demo script
-├── demo.py                  # Full demo with all features
-├── test_phase2.py           # Phase 2 component and integration tests
-└── test_real_site.py        # Real website testing script (Phase 2)
-```
-
-## Phase 2 Capabilities
-
-Phase 2 extends Phase 1 with:
-
-- ✅ **Multi-step journey simulation** - Navigate through complex user flows
-- ✅ **Dynamic pattern detection** - Detects patterns that emerge over time
-- ✅ **State tracking** - Remembers previous interactions for context-aware detection
-- ✅ **False Urgency detection** - Verifies timer reset behavior on reload
-- ✅ **Drip Pricing detection** - Tracks price changes through checkout
-- ✅ **Sneak into Basket detection** - Monitors cart state for unauthorized additions
-- ✅ **Roach Motel detection** - Compares signup vs cancellation difficulty
-- ✅ **Forced Continuity detection** - Identifies hidden auto-renewal terms
-- ✅ **Privacy Zuckering detection** - Analyzes consent UI for manipulation
 
 ## Debugging
 
-Phase 2 includes comprehensive debugging capabilities for graph execution:
-
-### Enable Debugging
-
-**Via command line:**
 ```bash
 # Basic debugging (node transitions, timing, task execution)
-python -m src.agent https://example.com --debug
+python test_real_site.py https://example.com --debug
 
-# Verbose debugging (includes state snapshots)
-python -m src.agent https://example.com --debug-verbose
+# Verbose debugging (includes full state snapshots)
+python test_real_site.py https://example.com --debug --verbose
 ```
 
-**Via environment variable:**
-```bash
-# Enable basic debugging
-export DEBUG_GRAPH=true
-python -m src.agent https://example.com
-
-# Enable verbose debugging
-export DEBUG_GRAPH=true
-export DEBUG_GRAPH_VERBOSE=true
-python -m src.agent https://example.com
-```
-
-### Debug Output Includes
-
-- **Node Entry/Exit**: Logs when each graph node is entered and exited
-- **Timing Metrics**: Execution time for each node
-- **State Transitions**: Graph edge transitions with reasons
-- **Task Execution**: Details of task execution and results
-- **Pattern Detection**: Detector execution and flags raised
-- **Performance Summary**: Aggregate timing statistics
-- **State Summary**: Final state overview with task completion, patterns detected
-
-### Example Debug Output
-
-```
-[STEP 0] → ENTER PLAN_GENESIS
-  Decomposing goal: Audit this website for dark patterns...
-  Generated 5 task(s)
-[STEP 0] ← EXIT PLAN_GENESIS [0.234s]
-
-[STEP 1] → ENTER NAV_ACTOR
-  Task: navigate - Navigate to https://example.com
-  Executing task: navigate
-    Goal: Navigate to https://example.com
-    Status: starting
-  Action type: navigate
-  Navigating to: https://example.com
-  Navigation successful
-[STEP 1] ← EXIT NAV_ACTOR [1.456s]
-
-[STEP 2] → ENTER DOM_AUDITOR
-  Running pattern detectors...
-  Detected 2 new pattern flag(s)
-    - DRIP_PRICING (confidence: 0.85)
-    - SNEAK_INTO_BASKET (confidence: 0.72)
-[STEP 2] ← EXIT DOM_AUDITOR [0.789s]
-
-======================================================================
-PERFORMANCE SUMMARY
-======================================================================
-Total execution time: 12.345s
-
-Node timings:
-  NAV_ACTOR          :  8 calls,   9.234s total,  1.154s avg,  2.345s max
-  DOM_AUDITOR        :  8 calls,   2.456s total,  0.307s avg,  0.567s max
-  STATE_EVAL         :  8 calls,   0.123s total,  0.015s avg,  0.034s max
-  PLAN_GENESIS       :  1 calls,   0.234s total,  0.234s avg,  0.234s max
-======================================================================
-```
+Debug output shows node entry/exit timing, task execution details, pattern detection results, and a performance summary.
 
 ## Limitations
 
-- Some sites have bot protection that may cause timeouts
-- Visual-only patterns (color, size manipulation) require additional CV work
-- Complex JavaScript-heavy sites may need more steps to fully explore
+- **Bot protection**: Some sites (e.g., eBay) block add-to-cart and checkout from unauthenticated automated sessions
+- **Visual patterns**: Color/size manipulation and visual misdirection require additional CV work
+- **Complex JS sites**: Heavy SPAs may need more steps to fully explore
+- **Login-gated flows**: Sites requiring authentication need credentials passed in the query
 
 ## License
 
