@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirDeal Flights - Book Cheap Flights</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .step { display: none; border: 2px solid #ddd; padding: 20px; border-radius: 5px; margin: 20px 0; }
+        .step.active { display: block; }
+        .price-banner { background: #003580; color: white; padding: 15px; text-align: center; font-size: 24px; border-radius: 5px; }
+        .fee-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .total-row { display: flex; justify-content: space-between; padding: 12px 0; font-weight: bold; font-size: 18px; border-top: 2px solid #333; margin-top: 10px; }
+        .next-button { background-color: #003580; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer; margin-top: 15px; }
+        .small-text { font-size: 11px; color: #999; }
+    </style>
+</head>
+<body>
+    <h1>AirDeal Flights</h1>
+
+    <!-- Step 1: Advertised price -->
+    <div class="step active" id="step1">
+        <div class="price-banner">London → Paris from $29.99!</div>
+        <h2>Select Your Flight</h2>
+        <p>Departure: March 15, 2026 | Return: March 22, 2026</p>
+        <div class="fee-row">
+            <span>Flight (1 adult)</span>
+            <span>$29.99</span>
+        </div>
+        <button class="next-button" onclick="goToStep(2)">Continue to Seat Selection</button>
+    </div>
+
+    <!-- Step 2: Add seat fee -->
+    <div class="step" id="step2">
+        <h2>Seat Selection</h2>
+        <div class="fee-row"><span>Flight (1 adult)</span><span>$29.99</span></div>
+        <div class="fee-row"><span>Seat assignment fee</span><span>$12.00</span></div>
+        <p class="small-text">* Seat assignment is required for all passengers</p>
+        <button class="next-button" onclick="goToStep(3)">Continue to Baggage</button>
+    </div>
+
+    <!-- Step 3: Add baggage fee -->
+    <div class="step" id="step3">
+        <h2>Baggage Options</h2>
+        <div class="fee-row"><span>Flight (1 adult)</span><span>$29.99</span></div>
+        <div class="fee-row"><span>Seat assignment fee</span><span>$12.00</span></div>
+        <div class="fee-row"><span>Carry-on baggage</span><span>$18.00</span></div>
+        <div class="fee-row"><span>Checked bag (1x 20kg)</span><span>$35.00</span></div>
+        <button class="next-button" onclick="goToStep(4)">Continue to Payment</button>
+    </div>
+
+    <!-- Step 4: Final price with all fees -->
+    <div class="step" id="step4">
+        <h2>Order Summary</h2>
+        <div class="fee-row"><span>Flight (1 adult)</span><span>$29.99</span></div>
+        <div class="fee-row"><span>Seat assignment fee</span><span>$12.00</span></div>
+        <div class="fee-row"><span>Carry-on baggage</span><span>$18.00</span></div>
+        <div class="fee-row"><span>Checked bag (1x 20kg)</span><span>$35.00</span></div>
+        <div class="fee-row"><span>Booking service fee</span><span>$8.99</span></div>
+        <div class="fee-row"><span>Payment processing fee</span><span>$4.50</span></div>
+        <div class="fee-row"><span>Airport taxes & surcharges</span><span>$22.50</span></div>
+        <div class="total-row">
+            <span>Total</span>
+            <span>$130.98</span>
+        </div>
+        <p class="small-text">Original advertised price: $29.99. Final price includes mandatory fees.</p>
+        <button class="next-button" onclick="alert('Booking confirmed!')">Pay $130.98</button>
+    </div>
+
+    <script>
+        function goToStep(n) {
+            document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+            document.getElementById('step' + n).classList.add('active');
+        }
+    </script>
+</body>
+</html>

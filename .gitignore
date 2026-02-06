@@ -49,6 +49,10 @@ artifacts/*
 .coverage
 htmlcov/
 
+# Evals
+evals/baseline.json
+evals/results/latest.json
+
 # Logs
 *.log
 

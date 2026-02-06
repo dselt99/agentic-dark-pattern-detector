@@ -1,0 +1,155 @@
+version: 1
+
+tier1a:
+  - id: t1a_urgency_language
+    description: "Urgency phrases in product page"
+    dom_fixture: |
+      <div class="product">
+        <p>Hurry! Only 2 left in stock - selling fast</p>
+        <button>Buy Now</button>
+      </div>
+    expected_patterns: [false_urgency]
+
+  - id: t1a_roach_confirmshaming
+    description: "Confirmshaming on subscription cancellation"
+    dom_fixture: |
+      <div>account subscription membership</div>
+      <button>Keep My Subscription</button>
+      <a href="#">No thanks, I don't want to save money</a>
+    expected_patterns: [roach_motel]
+
+  - id: t1a_sneak_pre_checked
+    description: "Pre-checked insurance checkbox"
+    dom_fixture: |
+      <input type="checkbox" checked> Add Extended Warranty Insurance - $14.99
+    expected_patterns: [sneak_into_basket]
+
+  - id: t1a_forced_continuity_autorenew
+    description: "Auto-renew near subscribe CTA"
+    dom_fixture: |
+      <p>Your subscription will automatically renew. You will be billed automatically each month.</p>
+      <button>Subscribe Now</button>
+    expected_patterns: [forced_continuity]
+
+  - id: t1a_privacy_no_reject
+    description: "Cookie consent with Accept but no Reject"
+    dom_fixture: |
+      <div class="cookie-banner">
+        <p>We use cookies to improve your experience.</p>
+        <button>Accept All</button>
+        <a href="/privacy">Privacy Policy</a>
+      </div>
+    expected_patterns: [privacy_zuckering]
+
+  - id: t1a_clean_stock
+    description: "Legitimate stock display without urgency language (negative control)"
+    dom_fixture: |
+      <div>Availability: In Stock (3 remaining)</div>
+      <button>Add to Cart</button>
+    expected_patterns: []
+
+  - id: t1a_clean_consent
+    description: "Cookie banner with Accept + Reject (negative control)"
+    dom_fixture: |
+      <div>We use cookies. consent privacy</div>
+      <button>Accept All</button>
+      <button>Reject All</button>
+    expected_patterns: []
+
+tier1b:
+  - id: t1b_false_urgency
+    simulation: false_urgency.html
+    query: "Check this page for dark patterns, reload to test if countdown timer resets"
+    max_steps: 15
+    expected_patterns: [false_urgency]
+    forbidden_patterns: []
+
+  - id: t1b_roach_motel
+    simulation: roach_motel.html
+    query: "Find the cancel/unsubscribe option on this subscription page"
+    max_steps: 15
+    expected_patterns: [roach_motel]
+    forbidden_patterns: []
+
+  - id: t1b_clean_stock
+    simulation: clean_stock.html
+    query: "Audit this product page for dark patterns"
+    max_steps: 10
+    expected_patterns: []
+    forbidden_patterns: [false_urgency]
+
+  - id: t1b_sneak_into_basket
+    simulation: sneak_into_basket.html
+    query: "Add the product to cart and check for unauthorized extras"
+    max_steps: 15
+    expected_patterns: [sneak_into_basket]
+    forbidden_patterns: []
+
+  - id: t1b_drip_pricing
+    simulation: drip_pricing.html
+    query: "Go through checkout and check if the final price matches the advertised price"
+    max_steps: 20
+    expected_patterns: [sneak_into_basket]
+    forbidden_patterns: []
+
+  - id: t1b_forced_continuity
+    simulation: forced_continuity.html
+    query: "Review this subscription signup for hidden auto-renewal terms"
+    max_steps: 15
+    expected_patterns: [forced_continuity]
+    forbidden_patterns: []
+
+  - id: t1b_privacy_zuckering
+    simulation: privacy_zuckering.html
+    query: "Check cookie consent options for manipulative design"
+    max_steps: 10
+    expected_patterns: [privacy_zuckering]
+    forbidden_patterns: []
+
+  - id: t1b_confirmshaming
+    simulation: confirmshaming.html
+    query: "Try to cancel the subscription and look for guilt-tripping language"
+    max_steps: 15
+    expected_patterns: [roach_motel]
+    forbidden_patterns: []
+
+tier2:
+  - id: t2_saucedemo_clean
+    url: https://www.saucedemo.com
+    query: "Log in with standard_user/secret_sauce, buy cheapest item, go through checkout"
+    max_steps: 25
+    expected_patterns: []
+    min_tasks_completed: 3
+    known_flaky: false
+
+  - id: t2_booking_urgency
+    url: https://www.booking.com
+    query: "Search for hotels in Paris and check listings for urgency patterns"
+    max_steps: 20
+    expected_patterns: [false_urgency]
+    min_tasks_completed: 2
+    known_flaky: true
+
+  - id: t2_ryanair_drip
+    url: https://www.ryanair.com
+    query: "Search for a flight and go through booking to check for hidden fees"
+    max_steps: 25
+    expected_patterns: [sneak_into_basket]
+    min_tasks_completed: 2
+    known_flaky: true
+
+  - id: t2_bbc_consent
+    url: https://www.bbc.com
+    query: "Check cookie consent banner for privacy zuckering"
+    max_steps: 10
+    expected_patterns: [privacy_zuckering]
+    min_tasks_completed: 1
+    known_flaky: false
+
+  - id: t2_nytimes_subscription
+    url: https://www.nytimes.com
+    query: "Check subscription page for forced continuity patterns"
+    max_steps: 15
+    expected_patterns: [forced_continuity]
+    min_tasks_completed: 2
+    known_flaky: true

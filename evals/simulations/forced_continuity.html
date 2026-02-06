@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StreamPlus - Start Your Free Trial</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .plan-card { border: 2px solid #6200ea; padding: 25px; border-radius: 10px; margin: 20px 0; text-align: center; }
+        .plan-price { font-size: 36px; font-weight: bold; color: #6200ea; }
+        .plan-price .period { font-size: 16px; color: #666; }
+        .subscribe-button { background-color: #6200ea; color: white; padding: 18px 40px; font-size: 20px; border: none; border-radius: 8px; cursor: pointer; margin: 15px 0; }
+        .free-trial { font-size: 22px; color: #4CAF50; font-weight: bold; }
+        .fine-print { font-size: 11px; color: #aaa; line-height: 1.4; margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee; }
+        .features { text-align: left; margin: 15px auto; max-width: 300px; }
+        .features li { padding: 5px 0; }
+    </style>
+</head>
+<body>
+    <h1>StreamPlus Premium</h1>
+
+    <div class="plan-card">
+        <p class="free-trial">Start Your 7-Day FREE Trial!</p>
+        <p class="plan-price">$14.99 <span class="period">/month</span></p>
+
+        <ul class="features">
+            <li>Unlimited streaming</li>
+            <li>4K Ultra HD quality</li>
+            <li>Download for offline viewing</li>
+            <li>No ads</li>
+            <li>Cancel anytime</li>
+        </ul>
+
+        <button class="subscribe-button" onclick="alert('Trial started! Your card will be charged $14.99/month after 7 days.')">
+            Start Free Trial
+        </button>
+
+        <!-- Forced continuity: auto-renewal buried in fine print -->
+        <p class="fine-print">
+            By clicking "Start Free Trial" you agree to our Terms of Service.
+            Your subscription will automatically renew at the end of the free trial period.
+            You will be billed automatically $14.99 each month until you cancel.
+            Your payment method will be charged on a recurring basis.
+            Price may increase with 30 days notice. Cancellation must be completed
+            at least 24 hours before the next billing cycle to avoid charges.
+        </p>
+    </div>
+</body>
+</html>

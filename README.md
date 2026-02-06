@@ -181,6 +181,41 @@ python demo.py roach_motel        # Single scenario
 python demo.py --dynamic          # Phase 2 multi-step audit against local simulation
 ```
 
+### Evaluation Framework (`python -m evals`)
+
+Three-tier regression testing framework for dark pattern detection:
+
+```bash
+# Tier 1a: Auditor-only tests (instant, no browser, no API tokens)
+python -m evals --tier 1a
+
+# Tier 1b: Simulation tests (full agent vs localhost HTML)
+python -m evals --tier 1b
+
+# Tier 2: Real-site regression tests (full agent vs live sites)
+python -m evals --tier 2
+
+# Run everything
+python -m evals --tier all
+
+# Save baseline for future comparison
+python -m evals --tier 1a --baseline
+
+# Compare current results against saved baseline
+python -m evals --tier 1a --compare
+
+# Run a single test by ID
+python -m evals --tier 1b --id t1b_roach_motel
+```
+
+| Tier | Tests | Speed | Cost | Purpose |
+|------|-------|-------|------|---------|
+| **1a** | 7 | < 2s | Free | Heuristic detector regression (DOM fixtures fed to Auditor) |
+| **1b** | 8 | ~10 min | ~$0.10-0.30/test | Full agent pipeline vs localhost simulations |
+| **2** | 5 | ~15 min | ~$0.30-0.50/test | Navigation + detection vs real sites (flaky-aware) |
+
+Test cases are defined in `evals/manifest.yaml` — adding a new test requires only a YAML entry (and optionally an HTML file for Tier 1b).
+
 ### Component Tests (`test_phase2.py`)
 
 Developer test suite for verifying individual Phase 2 components (planner, actor, auditor, graph wiring):

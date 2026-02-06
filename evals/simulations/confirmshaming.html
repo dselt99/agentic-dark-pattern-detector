@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FitLife Pro - Subscription Management</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .account-header { background: #f5f5f5; padding: 15px 20px; border-radius: 5px; margin-bottom: 20px; }
+        .subscription-card { border: 2px solid #ddd; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .keep-button { background: #4CAF50; color: white; padding: 15px 30px; font-size: 18px; border: none; border-radius: 5px; cursor: pointer; width: 100%; margin: 10px 0; }
+        .cancel-link { color: #999; font-size: 12px; text-decoration: underline; cursor: pointer; display: block; text-align: center; margin-top: 15px; }
+        .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; }
+        .modal-content { background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 10px; text-align: center; }
+        .modal-content h2 { color: #d32f2f; }
+        .shame-text { font-size: 14px; color: #666; font-style: italic; margin: 15px 0; }
+        .modal-keep { background: #4CAF50; color: white; padding: 15px 30px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer; width: 100%; margin: 8px 0; }
+        .modal-cancel { background: none; border: 1px solid #ccc; color: #999; padding: 10px 20px; font-size: 12px; border-radius: 5px; cursor: pointer; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="account-header">
+        <h1>FitLife Pro - Account Settings</h1>
+        <p>Logged in as: john@example.com | Membership: Premium</p>
+    </div>
+
+    <div class="subscription-card">
+        <h2>Your Subscription</h2>
+        <p><strong>Plan:</strong> FitLife Pro Premium</p>
+        <p><strong>Price:</strong> $29.99/month</p>
+        <p><strong>Next billing date:</strong> March 1, 2026</p>
+
+        <button class="keep-button">Keep My Subscription</button>
+        <a class="cancel-link" onclick="document.getElementById('cancelModal').style.display='block'">
+            Cancel subscription
+        </a>
+    </div>
+
+    <!-- Confirmshaming modal -->
+    <div class="modal" id="cancelModal">
+        <div class="modal-content">
+            <h2>Are you sure you want to cancel?</h2>
+            <p>You'll lose access to all premium features including:</p>
+            <ul style="text-align: left;">
+                <li>Personalized workout plans</li>
+                <li>Nutrition tracking</li>
+                <li>1-on-1 coaching sessions</li>
+            </ul>
+
+            <button class="modal-keep" onclick="document.getElementById('cancelModal').style.display='none'">
+                No thanks, I want to keep getting fit!
+            </button>
+
+            <!-- Confirmshaming: guilt-tripping language -->
+            <button class="modal-cancel" onclick="alert('Subscription cancelled.')">
+                No thanks, I don't want to be healthy
+            </button>
+
+            <p class="shame-text">
+                "I prefer to give up my fitness goals and lose my progress"
+            </p>
+        </div>
+    </div>
+</body>
+</html>
