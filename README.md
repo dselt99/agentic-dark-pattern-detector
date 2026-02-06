@@ -154,25 +154,53 @@ When the user goal involves buying, shopping, booking, or subscribing, the plann
 
 ## Testing
 
-```bash
-# Phase 2 component tests
-python test_phase2.py
-python test_phase2.py --components    # Component tests only
-python test_phase2.py --basic         # Basic integration test
+### Live Site Audit (`test_real_site.py`)
 
-# Phase 1 legacy demo (single-step analysis)
-python quick_demo.py                  # False urgency simulation
-python quick_demo.py roach_motel      # Roach motel simulation
+The primary CLI for running full audits against real websites:
+
+```bash
+# Audit a site with a purchase flow
+python test_real_site.py https://www.saucedemo.com \
+  --query "Log in, buy the cheapest item, go through checkout, look for dark patterns" \
+  --steps 25 --debug
+
+# Audit any e-commerce site
+python test_real_site.py https://example-shop.com \
+  --query "Buy a product and look out for dark patterns" \
+  --steps 20
+```
+
+### Local Simulations (`demo.py`)
+
+Runs against locally-served HTML pages with known dark patterns — useful for testing detection without hitting real sites:
+
+```bash
+python demo.py                    # All Phase 1 simulations (false urgency, roach motel, etc.)
+python demo.py false_urgency      # Single scenario
+python demo.py roach_motel        # Single scenario
+python demo.py --dynamic          # Phase 2 multi-step audit against local simulation
+```
+
+### Component Tests (`test_phase2.py`)
+
+Developer test suite for verifying individual Phase 2 components (planner, actor, auditor, graph wiring):
+
+```bash
+python test_phase2.py                 # Full test suite
+python test_phase2.py --components    # Component unit tests only
+python test_phase2.py --basic         # Basic integration test
 ```
 
 ## Debugging
 
 ```bash
 # Basic debugging (node transitions, timing, task execution)
-python test_real_site.py https://example.com --debug
+python test_real_site.py https://example.com \
+  --query "Look for dark patterns" --debug
 
 # Verbose debugging (includes full state snapshots)
-python test_real_site.py https://example.com --debug --verbose
+python test_real_site.py https://example.com \
+  --query "Look for dark patterns" --debug --verbose
 ```
 
 Debug output shows node entry/exit timing, task execution details, pattern detection results, and a performance summary.
