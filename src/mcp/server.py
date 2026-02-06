@@ -41,7 +41,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "browser_click",
-        "description": "Clicks an element on the page. Use this to test interaction flows like signup vs. cancellation paths (Roach Motel), or to add items to cart (Sneak into Basket).",
+        "description": "Clicks an element on the page. Use this to dismiss pop-up messages, test interaction flows like signup vs. cancellation paths (Roach Motel), or to add items to cart (Sneak into Basket).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -736,6 +736,40 @@ async def take_screenshot(
         }
 
 
+def _sanitize_css_selector(selector: str) -> str:
+    """Sanitize CSS selector to handle special characters.
+
+    IDs with special characters like colons need to be converted to
+    attribute selectors or have special chars escaped.
+
+    Args:
+        selector: Raw CSS selector string.
+
+    Returns:
+        Sanitized CSS selector.
+    """
+    if not selector:
+        return selector
+
+    # If it's an ID selector with special characters, convert to attribute selector
+    if selector.startswith('#'):
+        id_value = selector[1:]
+        # Check for special characters that are invalid in CSS ID selectors
+        special_chars = [':', '[', ']', '.', '>', '+', '~', '*', '/', '\\', '"', "'", '(', ')']
+        if any(char in id_value for char in special_chars):
+            # Use attribute selector instead
+            return f'[id="{id_value}"]'
+
+    # If it's a class selector with special characters, convert to attribute selector
+    if selector.startswith('.'):
+        class_value = selector[1:]
+        special_chars = [':', '[', ']', '>', '+', '~', '*', '/', '\\', '"', "'", '(', ')']
+        if any(char in class_value for char in special_chars):
+            return f'[class*="{class_value}"]'
+
+    return selector
+
+
 @mcp.tool()
 async def browser_click(selector: str) -> dict:
     """Clicks an element on the page. Use this to test interaction flows.
@@ -754,12 +788,15 @@ async def browser_click(selector: str) -> dict:
     try:
         _, _, page = await get_browser()
 
+        # Sanitize selector for special characters
+        safe_selector = _sanitize_css_selector(selector)
+
         # Find the element
-        element = await page.query_selector(selector)
+        element = await page.query_selector(safe_selector)
         if not element:
             return {
                 "status": "error",
-                "message": f"Element not found: {selector}",
+                "message": f"Element not found: {selector} (tried: {safe_selector})",
             }
 
         # Get element info before click
@@ -990,13 +1027,18 @@ async def browser_type(selector: str, text: str) -> dict:
     try:
         _, _, page = await get_browser()
 
-        element = await page.query_selector(selector)
+        # Sanitize selector for special characters
+        safe_selector = _sanitize_css_selector(selector)
+
+        element = await page.query_selector(safe_selector)
         if not element:
             return {
                 "status": "error",
-                "message": f"Element not found: {selector}",
+                "message": f"Element not found: {selector} (tried: {safe_selector})",
             }
 
+        # Click to focus first, then fill
+        await element.click()
         await element.fill(text)
 
         return {
@@ -1282,13 +1324,24 @@ async def get_interactive_elements_marked() -> dict:
                 'input[type="button"]',
                 'input[type="submit"]',
                 'input[type="text"]',
+                'input[type="search"]',
                 'input[type="email"]',
+                'input[type="tel"]',
+                'input[type="url"]',
+                'input[type="number"]',
+                'input[type="password"]',
                 'input[type="checkbox"]',
                 'input[type="radio"]',
+                'input:not([type])',
                 'select',
                 'textarea',
                 '[role="button"]',
                 '[role="link"]',
+                '[role="combobox"]',
+                '[role="searchbox"]',
+                '[role="textbox"]',
+                '[role="listbox"]',
+                '[contenteditable="true"]',
                 '[onclick]',
                 '[tabindex]:not([tabindex="-1"])'
             ];
@@ -1308,13 +1361,33 @@ async def get_interactive_elements_marked() -> dict:
                 const tag = element.tagName.toLowerCase();
                 const type = element.type || tag;
                 
-                // Generate selector
+                // Generate selector - prefer stable selectors over React-generated IDs
                 let selector = null;
+                const specialChars = /[:\\[\\]\\.>+~*\\/\\\\"'()]/;
+
                 if (element.id) {
-                    selector = `#${element.id}`;
+                    // Use attribute selector for IDs with special characters
+                    if (specialChars.test(element.id)) {
+                        selector = `[id="${element.id}"]`;
+                    } else {
+                        selector = `#${element.id}`;
+                    }
+                } else if (element.name) {
+                    // Prefer name attribute for form elements
+                    selector = `[name="${element.name}"]`;
+                } else if (element.getAttribute('aria-label')) {
+                    // Use aria-label for accessible elements
+                    selector = `[aria-label="${element.getAttribute('aria-label')}"]`;
+                } else if (element.getAttribute('placeholder')) {
+                    // Use placeholder for inputs
+                    selector = `[placeholder="${element.getAttribute('placeholder')}"]`;
                 } else if (element.className && typeof element.className === 'string') {
                     const firstClass = element.className.split(' ')[0];
-                    selector = `.${firstClass}`;
+                    if (firstClass && !specialChars.test(firstClass)) {
+                        selector = `.${firstClass}`;
+                    } else {
+                        selector = tag;
+                    }
                 } else {
                     selector = tag;
                 }

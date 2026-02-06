@@ -2,11 +2,12 @@
 
 This module implements the Planner-Actor-Auditor orchestration using
 LangGraph's StateGraph for managing complex, multi-step journeys.
+
+Supports checkpointing for resuming from specific steps.
 """
 
 from typing import TypedDict, List, Optional, Dict, Any, Literal
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
 import asyncio
 
 from .ledger import JourneyLedger
@@ -21,7 +22,44 @@ from .debug import (
     DEBUG_ENABLED,
 )
 from .security import sanitize_untrusted_content, log_security_event
-from ..schemas import AuditFlag, InteractionSnapshot, CartItem, ConsentStatus
+from .checkpoints import save_checkpoint
+from ..schemas import AuditFlag, InteractionSnapshot, CartItem, ConsentStatus, PatternType
+
+
+async def _refresh_browser_state(mcp_client, browser_state: Dict[str, Any]) -> None:
+    """Fetch fresh page state from the browser after an action.
+
+    Updates browser_state in-place with current URL, DOM tree, and marked elements.
+    This is the single most important function for preventing stale-state loops.
+    """
+    try:
+        # 1. Fresh URL
+        url_result = await mcp_client.call_tool("get_page_url")
+        if url_result.get("status") == "success":
+            browser_state["url"] = url_result.get("url", browser_state.get("url", ""))
+
+        # 2. Fresh DOM tree
+        tree_result = await mcp_client.call_tool("get_accessibility_tree")
+        if tree_result.get("status") == "success":
+            raw_tree = tree_result.get("tree", "")
+            sanitization = sanitize_untrusted_content(raw_tree)
+            browser_state["dom_tree"] = sanitization.sanitized_content
+            if sanitization.injection_detected:
+                log_security_event(
+                    "INJECTION_ATTEMPT",
+                    {"url": browser_state.get("url"), "warnings": sanitization.warnings},
+                    severity="WARNING",
+                )
+
+        # 3. Fresh marked elements
+        marked_result = await mcp_client.call_tool("get_interactive_elements_marked")
+        if marked_result.get("status") == "success":
+            browser_state["marked_elements"] = marked_result.get("marked_elements", {})
+
+    except Exception as e:
+        if DEBUG_ENABLED:
+            from .debug import debug_logger
+            debug_logger.warning(f"  Re-observation failed: {e}")
 
 
 class PlannerState(TypedDict):
@@ -43,7 +81,8 @@ class BrowserState(TypedDict):
     marked_elements: Optional[Dict[str, Any]]
     network_idle: bool
     visual_stable: bool
-    last_reload_timers: Optional[List[Dict[str, Any]]]
+    last_reload_timers_before: Optional[List[Dict[str, Any]]]
+    last_reload_timers_after: Optional[List[Dict[str, Any]]]
 
 
 class AuditLog(TypedDict):
@@ -98,11 +137,11 @@ class AgentState(TypedDict):
     current_step: int
 
 
-def create_state_graph() -> StateGraph:
+def create_state_graph():
     """Create and configure the LangGraph StateGraph for Phase 2 architecture.
 
     Returns:
-        Configured StateGraph instance.
+        Compiled StateGraph instance.
     """
     graph = StateGraph(AgentState)
 
@@ -142,7 +181,7 @@ def create_state_graph() -> StateGraph:
         "STATE_EVAL",
         check_completion,
         {
-            "continue": "SAFE_GUARD",
+            "continue": "SAFE_GUARD",  
             "complete": END,
             "retry": "WAIT_AND_RETRY",
             "replan": "PLAN_GENESIS",
@@ -161,53 +200,72 @@ def create_state_graph() -> StateGraph:
 
 @debug_node("PLAN_GENESIS")
 async def plan_genesis_node(state: AgentState) -> AgentState:
-    """PLAN_GENESIS node: Decompose high-level goal into task queue.
-
-    This node takes the user query and generates a DAG of sub-goals.
-    """
+    """PLAN_GENESIS node: Decompose goal OR Re-plan based on failure."""
+    
+    # 1. Unpack State
     user_query = state["planner_state"]["user_query"]
     target_url = state["target_url"]
     planner = state.get("planner")
+    planner_state = state["planner_state"]
+    
+    # Check if we are here because of a failure (Re-planning Loop)
+    is_replanning = planner_state.get("re_planning_needed", False)
     
     if DEBUG_ENABLED:
         from .debug import debug_logger
-        debug_logger.debug(f"  Decomposing goal: {user_query[:60]}...")
+        mode = "RE-PLANNING" if is_replanning else "INITIAL PLANNING"
+        debug_logger.debug(f"  Genesis Mode: {mode}")
+
+    task_queue = []
 
     if planner:
-        # Use Planner to decompose goal
         try:
-            task_queue = await planner.decompose_goal(user_query, target_url)
-            # Ensure first task is navigation if not already
-            if task_queue and task_queue[0].get("type") != "navigate":
-                task_queue.insert(0, {"id": 0, "type": "navigate", "goal": f"Navigate to {target_url}"})
-                # Renumber IDs
-                for i, task in enumerate(task_queue):
-                    task["id"] = i
+            if is_replanning:
+                # === PATH A: RECOVERY MODE ===
+                # We failed. Give the planner context so it can fix it.
+                failed_task = planner_state.get("current_task", {})
+                error_msg = state["control_signal"].get("error_message", "Unknown error")
+                current_dom = state["browser_state"].get("dom_tree", "")
+                
+                if DEBUG_ENABLED:
+                    debug_logger.warning(f"  Re-planning context: Failed '{failed_task.get('goal')}' due to '{error_msg}'")
+
+                task_queue = await planner.replan_goal(
+                    original_query=user_query,
+                    failed_step=failed_task.get("goal", "Unknown Step"),
+                    error_context=error_msg,
+                    current_dom=current_dom  # Critical: Let planner see obstructions!
+                )
+            else:
+                # === PATH B: FRESH START ===
+                # Standard decomposition for a new run
+                task_queue = await planner.decompose_goal(user_query, target_url)
+
+            # Safety: Ensure ID numbering is correct
+            for i, task in enumerate(task_queue):
+                task["id"] = i
+                
         except Exception as e:
-            # Fallback to simple task queue on error
+            # Fallback if LLM fails completely
+            if DEBUG_ENABLED:
+                debug_logger.error(f"  Planning failed: {e}")
             task_queue = [
                 {"id": 0, "type": "navigate", "goal": f"Navigate to {target_url}"},
                 {"id": 1, "type": "observe", "goal": "Get accessibility tree"},
-                {"id": 2, "type": "analyze", "goal": "Analyze for dark patterns"},
+                {"id": 2, "type": "analyze", "goal": "Fallback analysis"},
             ]
-    else:
-        # Fallback to simple task queue
-        task_queue = [
-            {"id": 0, "type": "navigate", "goal": f"Navigate to {target_url}"},
-            {"id": 1, "type": "observe", "goal": "Get accessibility tree"},
-            {"id": 2, "type": "analyze", "goal": "Analyze for dark patterns"},
-        ]
-
+    
+    # 2. Update State
     state["planner_state"]["task_queue"] = task_queue
     state["planner_state"]["current_task"] = task_queue[0] if task_queue else None
-    state["planner_state"]["re_planning_needed"] = False
+    
+    # CRITICAL: Reset the flag so we don't get stuck in re-planning mode forever
+    state["planner_state"]["re_planning_needed"] = False 
 
     if DEBUG_ENABLED:
-        from .debug import debug_logger
-        debug_logger.debug(f"  Generated {len(task_queue)} task(s)")
+        debug_logger.debug(f"  Generated {len(task_queue)} task(s)")
 
     return state
-
 
 @debug_node("NAV_ACTOR")
 async def nav_actor_node(state: AgentState) -> AgentState:
@@ -232,10 +290,10 @@ async def nav_actor_node(state: AgentState) -> AgentState:
     try:
         # Get current DOM tree and marked elements
         dom_tree = browser_state.get("dom_tree")
-        marked_elements = browser_state.get("marked_elements")
+        marked_elements = browser_state.get("marked_elements", {}) # Ensure dict if None
 
-        # Get short-term context for Actor
-        short_term_context = ledger.get_short_term_context(3)
+        # Get short-term context for Actor (include action results for deduplication)
+        short_term_context = ledger.get_short_term_context(5)
         context_list = [
             {
                 "action_taken": s.action_taken,
@@ -245,39 +303,84 @@ async def nav_actor_node(state: AgentState) -> AgentState:
             for s in short_term_context
         ]
 
+        # Build failed-action list for deduplication
+        failed_actions = []
+        for s in short_term_context:
+            if s.action_taken and s.action_taken.get("result") == "failed":
+                failed_actions.append({
+                    "type": s.action_taken.get("type", "unknown"),
+                    "target": str(s.action_taken.get("target", "unknown"))[:80],
+                    "error": s.action_taken.get("error", "unknown"),
+                })
+
         # Execute task via Actor
         if actor and mcp_client:
             if DEBUG_ENABLED:
                 log_task_execution(current_task, {"status": "starting"})
-            
+
             action_result = await actor.execute_task(
                 task=current_task,
                 dom_tree=dom_tree,
                 marked_elements=marked_elements,
                 short_term_context=context_list,
+                failed_actions=failed_actions if failed_actions else None,
             )
 
             action = action_result.get("action", {})
             action_type = action.get("action_type")
             
+            # --- 🔧 FIX STARTS HERE: Define raw_target and translate ---
+            raw_target = action.get("target")
+            final_selector = raw_target
+
+            # Check if target is a Mark ID (int or string-digit)
+            if raw_target is not None:
+                is_mark_id = (isinstance(raw_target, int)) or \
+                             (isinstance(raw_target, str) and raw_target.isdigit())
+                
+                if is_mark_id and marked_elements:
+                    mark_key = str(raw_target)
+                    if mark_key in marked_elements:
+                        # Translate ID -> CSS Selector
+                        final_selector = marked_elements[mark_key].get("selector")
+                        if DEBUG_ENABLED:
+                            from .debug import debug_logger
+                            debug_logger.debug(f" 🔄 Translated Mark {raw_target} -> {final_selector}")
+                    else:
+                        if DEBUG_ENABLED:
+                            from .debug import debug_logger
+                            debug_logger.warning(f" ⚠️ Mark ID {raw_target} not found in current element map")
+            
+            # Update the Action Object with the real selector
+            if final_selector:
+                action["target"] = final_selector
+            # --- FIX ENDS HERE ---
+
             if DEBUG_ENABLED:
                 from .debug import debug_logger
                 debug_logger.debug(f"  Action type: {action_type}")
-                if action.get("target"):
-                    debug_logger.debug(f"  Target: {action.get('target')[:50]}")
+                if final_selector:
+                    debug_logger.debug(f"  Target: {str(final_selector)[:50]}")
 
-            # Record action in ledger
+            # Capture URL before action for change detection
+            url_before_action = browser_state.get("url", state["target_url"])
+
+            # Record action in ledger (will be updated with result after execution)
             current_url = browser_state.get("url", state["target_url"])
+            action_record = {
+                "type": action_type,
+                "target": final_selector,
+                "value": action.get("value"),
+                "reasoning": action.get("reasoning"),
+            }
             snapshot = ledger.record_snapshot(
                 url=current_url,
                 user_intent=current_task.get("goal", ""),
-                action_taken={
-                    "type": action_type,
-                    "target": action.get("target"),
-                    "value": action.get("value"),
-                    "reasoning": action.get("reasoning"),
-                },
+                action_taken=action_record,
             )
+
+            # Track whether this is a state-changing action that needs re-observation
+            needs_reobserve = False
 
             # Handle different action types
             if action_type == "navigate":
@@ -285,99 +388,173 @@ async def nav_actor_node(state: AgentState) -> AgentState:
                 if DEBUG_ENABLED:
                     from .debug import debug_logger
                     debug_logger.debug(f"  Navigating to: {url}")
+
+                # Invalidate stale DOM before navigation
+                browser_state["dom_tree"] = None
+                browser_state["marked_elements"] = None
+
                 nav_result = await mcp_client.call_tool("browser_navigate", url=url)
                 if nav_result.get("status") == "success":
                     browser_state["url"] = url
-                    # Wait for page to load
                     if wait_strategy:
                         from ..mcp.server import get_browser
                         _, _, page = await get_browser()
-                        await wait_strategy.wait_for_network_idle(page)
+                        await wait_strategy.wait_for_stability(page)
                     current_task["completed"] = True
+                    needs_reobserve = True
+                    action_record["result"] = "success"
+
+                    try:
+                        screenshot_result = await mcp_client.call_tool(
+                            "take_screenshot", filename_prefix="navigation",
+                        )
+                        if screenshot_result.get("status") == "success":
+                            browser_state["screenshot_path"] = screenshot_result.get("path", "")
+                    except Exception:
+                        pass
+
                     if DEBUG_ENABLED:
                         from .debug import debug_logger
                         debug_logger.debug("  Navigation successful")
                 else:
                     current_task["failed"] = True
                     current_task["error"] = nav_result.get("message", "Navigation failed")
+                    action_record["result"] = "failed"
+                    action_record["error"] = current_task["error"]
                     if DEBUG_ENABLED:
                         from .debug import debug_logger
                         debug_logger.warning(f"  Navigation failed: {current_task['error']}")
 
             elif action_type == "observe":
-                # Get accessibility tree
-                tree_result = await mcp_client.call_tool("get_accessibility_tree")
-                if tree_result.get("status") == "success":
-                    raw_tree = tree_result.get("tree", "")
-                    # Sanitize untrusted DOM content
-                    sanitization = sanitize_untrusted_content(raw_tree)
-                    browser_state["dom_tree"] = sanitization.sanitized_content
-                    if sanitization.injection_detected:
-                        log_security_event(
-                            "INJECTION_ATTEMPT",
-                            {
-                                "url": browser_state.get("url"),
-                                "warnings": sanitization.warnings,
-                            },
-                            severity="WARNING",
-                        )
-                    current_task["completed"] = True
-                else:
-                    current_task["failed"] = True
-
-                # Get marked elements for Set-of-Marks
-                marked_result = await mcp_client.call_tool("get_interactive_elements_marked")
-                if marked_result.get("status") == "success":
-                    browser_state["marked_elements"] = marked_result.get("marked_elements", {})
+                # Use the shared re-observation helper
+                await _refresh_browser_state(mcp_client, browser_state)
+                current_task["completed"] = True
+                action_record["result"] = "success"
 
             elif action_type == "click":
-                selector = action.get("target")
-                if selector:
-                    click_result = await mcp_client.call_tool("browser_click", selector=selector)
+                if final_selector and isinstance(final_selector, str):
+                    # Invalidate stale DOM before click (may navigate)
+                    browser_state["dom_tree"] = None
+                    browser_state["marked_elements"] = None
+
+                    click_result = await mcp_client.call_tool("browser_click", selector=final_selector)
                     if click_result.get("status") == "success":
-                        # Wait for stability after click
                         if wait_strategy:
                             from ..mcp.server import get_browser
                             _, _, page = await get_browser()
                             await wait_strategy.wait_for_stability(page)
                         current_task["completed"] = True
+                        needs_reobserve = True
+                        action_record["result"] = "success"
+                    else:
+                        current_task["failed"] = True
+                        current_task["error"] = click_result.get("message", "Click failed")
+                        action_record["result"] = "failed"
+                        action_record["error"] = current_task["error"]
+                else:
+                    current_task["failed"] = True
+                    current_task["error"] = f"Invalid selector: {final_selector} (Raw: {raw_target})"
+                    action_record["result"] = "failed"
+                    action_record["error"] = current_task["error"]
 
             elif action_type == "type":
-                selector = action.get("target")
                 text = action.get("value", "")
-                if selector:
-                    type_result = await mcp_client.call_tool("browser_type", selector=selector, text=text)
+                if final_selector and isinstance(final_selector, str):
+                    type_result = await mcp_client.call_tool("browser_type", selector=final_selector, text=text)
                     if type_result.get("status") == "success":
                         current_task["completed"] = True
+                        needs_reobserve = True
+                        action_record["result"] = "success"
+                    else:
+                        current_task["failed"] = True
+                        current_task["error"] = type_result.get("message", "Type failed")
+                        action_record["result"] = "failed"
+                        action_record["error"] = current_task["error"]
+                else:
+                    current_task["failed"] = True
+                    current_task["error"] = f"Invalid selector: {final_selector}"
+                    action_record["result"] = "failed"
+                    action_record["error"] = current_task["error"]
 
             elif action_type == "scroll":
                 direction = action.get("value", "down")
                 scroll_result = await mcp_client.call_tool("browser_scroll", direction=direction)
                 if scroll_result.get("status") == "success":
                     current_task["completed"] = True
+                    needs_reobserve = True
+                    action_record["result"] = "success"
+                else:
+                    current_task["failed"] = True
+                    current_task["error"] = scroll_result.get("message", "Scroll failed")
+                    action_record["result"] = "failed"
+                    action_record["error"] = current_task["error"]
 
             elif action_type == "wait":
-                # Wait action - just mark as completed
                 current_task["completed"] = True
+                action_record["result"] = "success"
 
             elif action_type == "reload":
-                # Reload page (for False Urgency testing)
+                browser_state["dom_tree"] = None
+                browser_state["marked_elements"] = None
+
                 reload_result = await mcp_client.call_tool("browser_reload")
                 if reload_result.get("status") == "success":
-                    # Store reload info for False Urgency detection
-                    browser_state["last_reload_timers"] = reload_result.get("timers_after", [])
+                    browser_state["last_reload_timers_before"] = reload_result.get("timers_before", [])
+                    browser_state["last_reload_timers_after"] = reload_result.get("timers_after", [])
                     current_task["completed"] = True
+                    needs_reobserve = True
+                    action_record["result"] = "success"
+                else:
+                    current_task["failed"] = True
+                    current_task["error"] = reload_result.get("message", "Reload failed")
+                    action_record["result"] = "failed"
+                    action_record["error"] = current_task["error"]
+
+            elif action_type == "dismiss":
+                from ..mcp.server import dismiss_popup
+                dismiss_result = await mcp_client.call_tool("dismiss_popup")
+                if dismiss_result.get("status") == "success":
+                    current_task["completed"] = True
+                    needs_reobserve = True
+                    action_record["result"] = "success"
+                else:
+                    await mcp_client.call_tool("browser_key", key="Escape")
+                    current_task["completed"] = True
+                    needs_reobserve = True
+                    action_record["result"] = "success"
+
+            else:
+                if DEBUG_ENABLED:
+                    from .debug import debug_logger
+                    debug_logger.warning(f"  Unknown action type: {action_type} - marking task complete")
+                current_task["completed"] = True
+                action_record["result"] = "success"
+
+            # === POST-ACTION RE-OBSERVATION ===
+            # This is the critical fix: fetch fresh page state after every
+            # state-changing action so the next step doesn't use stale DOM.
+            if needs_reobserve and mcp_client:
+                if DEBUG_ENABLED:
+                    from .debug import debug_logger
+                    debug_logger.debug("  Re-observing browser state after action...")
+                await _refresh_browser_state(mcp_client, browser_state)
+
+                # Detect URL change — if URL changed, the action worked even if
+                # the task didn't explicitly mark it complete
+                url_after = browser_state.get("url", "")
+                if url_after and url_after != url_before_action:
+                    if DEBUG_ENABLED:
+                        from .debug import debug_logger
+                        debug_logger.debug(f"  URL changed: {url_before_action[:60]} -> {url_after[:60]}")
 
             # Update browser state
             browser_state["network_idle"] = True
             browser_state["visual_stable"] = True
 
         else:
-            # Fallback: mark task as completed if no actor
             current_task["completed"] = True
 
     except Exception as e:
-        # On error, mark task as failed and set error message
         current_task["completed"] = False
         state["control_signal"]["error_message"] = str(e)
         state["control_signal"]["action"] = "error"
@@ -395,6 +572,9 @@ async def dom_auditor_node(state: AgentState) -> AgentState:
     This node runs in parallel to the Actor, observing state changes
     without interfering in navigation.
     """
+    # Import debug_logger at the top for consistent logging
+    from .debug import debug_logger
+
     auditor = state.get("auditor")
     mcp_client = state.get("mcp_client")
     ledger = state["ledger"]
@@ -409,17 +589,52 @@ async def dom_auditor_node(state: AgentState) -> AgentState:
         state["audit_log"]["violations_detected"] = False
 
     if not auditor:
+        debug_logger.warning("  No auditor instance - skipping pattern detection")
         return state
 
     try:
         # Get latest snapshot
         latest_snapshot = ledger.get_latest_snapshot()
         if not latest_snapshot:
+            debug_logger.warning("  No snapshot available - skipping pattern detection")
             return state
 
-        # Get current page state
-        dom_tree = browser_state.get("dom_tree")
         current_url = browser_state.get("url", state["target_url"])
+        debug_logger.debug(f"  Auditor starting for URL: {current_url}")
+
+        # Use cached DOM tree if available and recent (from Actor's observe action)
+        # Only fetch fresh DOM if cache is empty - this reduces API calls significantly
+        dom_tree = browser_state.get("dom_tree")
+
+        if dom_tree:
+            debug_logger.debug(f"  Using cached DOM tree: {len(dom_tree)} chars")
+        elif mcp_client:
+            # Only fetch if we don't have a cached tree
+            debug_logger.debug("  No cached DOM, fetching accessibility tree for analysis...")
+
+            tree_result = await mcp_client.call_tool("get_accessibility_tree")
+            if tree_result.get("status") == "success":
+                raw_tree = tree_result.get("tree", "")
+                # Sanitize untrusted DOM content
+                sanitization = sanitize_untrusted_content(raw_tree)
+                dom_tree = sanitization.sanitized_content
+                browser_state["dom_tree"] = dom_tree
+
+                if sanitization.injection_detected:
+                    log_security_event(
+                        "INJECTION_ATTEMPT",
+                        {
+                            "url": current_url,
+                            "warnings": sanitization.warnings,
+                        },
+                        severity="WARNING",
+                    )
+
+                debug_logger.debug(f"  DOM tree fetched: {len(dom_tree)} chars")
+            else:
+                debug_logger.warning(f"  Failed to fetch DOM tree: {tree_result.get('message', 'unknown')}")
+        else:
+            debug_logger.warning("  No MCP client and no cached DOM tree")
 
         # Get cart state and price breakdown if available
         cart_state = None
@@ -457,38 +672,109 @@ async def dom_auditor_node(state: AgentState) -> AgentState:
                 latest_snapshot.perceived_value = total
 
         # Observe state with Auditor first
-        if DEBUG_ENABLED:
-            from .debug import debug_logger
-            debug_logger.debug("  Running pattern detectors...")
-        
+        debug_logger.debug("  Running pattern detectors...")
+
         new_flags = await auditor.observe_state(
             snapshot=latest_snapshot,
             dom_tree=dom_tree,
             price_breakdown=price_breakdown,
         )
-        
-        if DEBUG_ENABLED:
-            if new_flags:
-                from .debug import debug_logger
-                debug_logger.info(f"  Detected {len(new_flags)} new pattern flag(s)")
-                for flag in new_flags[:3]:  # Log first 3
-                    pattern = flag.pattern_type.value if hasattr(flag, "pattern_type") else "unknown"
-                    confidence = flag.confidence if hasattr(flag, "confidence") else 0.0
-                    debug_logger.debug(f"    - {pattern} (confidence: {confidence:.2f})")
+
+        if new_flags:
+            debug_logger.info(f"  Detected {len(new_flags)} new pattern flag(s)")
+            for flag in new_flags[:3]:  # Log first 3
+                pattern = flag.pattern_type.value if hasattr(flag, "pattern_type") else "unknown"
+                confidence = flag.confidence if hasattr(flag, "confidence") else 0.0
+                debug_logger.debug(f"    - {pattern} (confidence: {confidence:.2f})")
+        else:
+            debug_logger.debug("  No patterns detected in this step")
+
+        # Take screenshots: always for evidence when patterns detected, every step only in debug mode
+        current_step = state.get("current_step", 0)
+        current_task = state["planner_state"].get("current_task", {})
+        task_type = current_task.get("type", "unknown") if current_task else "unknown"
+
+        # Check DEBUG_ENABLED dynamically from the module (not the imported copy)
+        from .debug import DEBUG_ENABLED as debug_enabled_now
+        should_screenshot = bool(new_flags) or debug_enabled_now  # Evidence screenshots always, debug screenshots when enabled
+        debug_logger.debug(f"  should_screenshot={should_screenshot} (new_flags={bool(new_flags)}, debug={debug_enabled_now})")
+
+        if mcp_client and should_screenshot:
+            try:
+                # Take screenshot for this step
+                prefix = f"step_{current_step:03d}_{task_type}"
+                if new_flags:
+                    # Include pattern name in filename if patterns detected
+                    pattern_names = "_".join([f.pattern_type.value for f in new_flags[:2]])
+                    prefix = f"step_{current_step:03d}_evidence_{pattern_names}"
+
+                debug_logger.debug(f"  Taking screenshot: {prefix}")
+                screenshot_result = await mcp_client.call_tool(
+                    "take_screenshot",
+                    filename_prefix=prefix,
+                )
+                if screenshot_result.get("status") == "success":
+                    screenshot_path = screenshot_result.get("path", "")
+                    latest_snapshot.screenshot_ref = screenshot_path
+                    browser_state["screenshot_path"] = screenshot_path
+                    debug_logger.debug(f"  Screenshot captured: {screenshot_path}")
+                else:
+                    debug_logger.warning(f"  Screenshot failed: {screenshot_result.get('message', 'unknown')}")
+            except Exception as e:
+                debug_logger.warning(f"  Failed to capture screenshot: {e}")
 
         # Check for False Urgency if reload happened
-        reload_timers = browser_state.get("last_reload_timers")
-        if reload_timers:
-            # Check if timers reset (False Urgency pattern)
-            for timer_info in reload_timers:
-                timer_value = timer_info.get("match", "")
-                if timer_value:
-                    false_urgency_flags = await auditor.false_urgency_detector.detect(
-                        timer_value=timer_value,
-                        timer_selector="#timer",  # Default selector
-                        after_reload=True,
+        timers_before = browser_state.get("last_reload_timers_before", [])
+        timers_after = browser_state.get("last_reload_timers_after", [])
+
+        if timers_before and timers_after:
+            # Compare timer values before and after reload
+            before_values = {t.get("match", "") for t in timers_before if t.get("match")}
+            after_values = {t.get("match", "") for t in timers_after if t.get("match")}
+
+            # Find timers that reset to original values (not 00:00)
+            reset_timers = before_values & after_values - {"00:00", "0:00", ""}
+
+            if reset_timers:
+                # Timers reset to original values - this is False Urgency
+                for timer_value in reset_timers:
+                    flag = AuditFlag(
+                        pattern_type=PatternType.FALSE_URGENCY,
+                        confidence=0.9,
+                        step_id=len(ledger.snapshots) - 1,
+                        evidence=(
+                            f"Timer '{timer_value}' reset to original value after page reload. "
+                            "This indicates artificial urgency rather than a real deadline."
+                        ),
+                        element_selector="detected_timer",
+                        priority="high",
                     )
-                    new_flags.extend(false_urgency_flags)
+                    new_flags.append(flag)
+
+                if DEBUG_ENABLED:
+                    from .debug import debug_logger
+                    debug_logger.info(f"  False Urgency detected: {len(reset_timers)} timer(s) reset on reload")
+
+                # Take screenshot as evidence for False Urgency
+                if mcp_client:
+                    try:
+                        screenshot_result = await mcp_client.call_tool(
+                            "take_screenshot",
+                            filename_prefix="evidence_false_urgency_timer_reset",
+                        )
+                        if screenshot_result.get("status") == "success":
+                            screenshot_path = screenshot_result.get("path", "")
+                            latest_snapshot.screenshot_ref = screenshot_path
+                            browser_state["screenshot_path"] = screenshot_path
+                            if DEBUG_ENABLED:
+                                debug_logger.debug(f"  False Urgency screenshot: {screenshot_path}")
+                    except Exception as e:
+                        if DEBUG_ENABLED:
+                            debug_logger.warning(f"  Failed to capture False Urgency screenshot: {e}")
+
+            # Clear reload timers after processing
+            browser_state["last_reload_timers_before"] = None
+            browser_state["last_reload_timers_after"] = None
 
         # Add new flags to audit log
         state["audit_log"]["flags"].extend(new_flags)
@@ -583,10 +869,54 @@ async def state_eval_node(state: AgentState) -> AgentState:
                 from .debug import debug_logger
                 debug_logger.warning("  Task failed after retries, re-planning needed")
     else:
-        # Continue with current task
-        state["control_signal"]["action"] = "continue"
+        # Task neither completed nor failed - track attempts to detect stuck loops
+        attempt_count = current_task.get("attempt_count", 0) + 1
+        current_task["attempt_count"] = attempt_count
+
+        if attempt_count >= 8:
+            # Ultimate fallback: force-complete as FAILURE after 8 attempts
+            if DEBUG_ENABLED:
+                from .debug import debug_logger
+                debug_logger.warning(f"  Task {current_task.get('id')} stuck after {attempt_count} attempts - force-completing as FAILURE")
+            current_task["completed"] = True
+            current_task["forced"] = True
+            current_task["failed_forced"] = True  # Mark as forced failure for reporting
+            state["control_signal"]["action"] = "continue"
+        elif attempt_count >= 5:
+            # Escalation 2: trigger re-plan — current plan is not working
+            if DEBUG_ENABLED:
+                from .debug import debug_logger
+                debug_logger.warning(f"  Task {current_task.get('id')} stuck after {attempt_count} attempts - triggering re-plan")
+            state["planner_state"]["re_planning_needed"] = True
+            state["control_signal"]["action"] = "replan"
+            state["control_signal"]["error_message"] = (
+                f"Task '{current_task.get('goal', '')}' stuck after {attempt_count} attempts. "
+                f"Current URL: {state['browser_state'].get('url', 'unknown')}"
+            )
+        elif attempt_count >= 3:
+            # Escalation 1: force re-observe to get fresh DOM
+            if DEBUG_ENABLED:
+                from .debug import debug_logger
+                debug_logger.warning(f"  Task {current_task.get('id')} stuck after {attempt_count} attempts - forcing re-observe")
+            # Invalidate DOM to force fresh fetch on next NAV_ACTOR cycle
+            state["browser_state"]["dom_tree"] = None
+            state["browser_state"]["marked_elements"] = None
+            state["control_signal"]["action"] = "continue"
+        else:
+            # Continue with current task
+            state["control_signal"]["action"] = "continue"
 
     state["current_step"] = current_step + 1
+
+    # Save checkpoint after each step
+    thread_id = state.get("session_id", "unknown")
+    save_checkpoint(
+        thread_id=thread_id,
+        step=current_step + 1,
+        state=state,
+        node="STATE_EVAL"
+    )
+
     return state
 
 
@@ -640,6 +970,10 @@ async def wait_and_retry_node(state: AgentState) -> AgentState:
             state["browser_state"]["visual_stable"] = stability_result.get("visual_stable", False)
         except Exception:
             pass
+
+    # Refresh browser state so the retry has fresh DOM
+    if mcp_client:
+        await _refresh_browser_state(mcp_client, state["browser_state"])
 
     state["control_signal"]["action"] = "continue"
     state["control_signal"]["wait_reason"] = "Retrying after wait"

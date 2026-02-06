@@ -353,7 +353,6 @@ class DarkPatternAgent:
                     "url": url,
                     "step": step,
                     "warnings": sanitization_result.warnings,
-                    "removed_patterns": sanitization_result.removed_patterns,
                 },
                 severity="WARNING",
             )
