@@ -72,12 +72,13 @@ class SimulationServer:
 
     def start(self):
         """Start the HTTP server in a background thread."""
+        serve_dir = str(self.directory)
         handler = type(
             "Handler",
             (SimpleHTTPRequestHandler,),
             {
                 "__init__": lambda self, *args, **kwargs: SimpleHTTPRequestHandler.__init__(
-                    self, *args, directory=str(self.directory), **kwargs
+                    self, *args, directory=serve_dir, **kwargs
                 )
             },
         )

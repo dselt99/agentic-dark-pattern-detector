@@ -50,6 +50,8 @@ class Actor:
         marked_elements: Optional[Dict[str, Any]] = None,
         short_term_context: Optional[List[Dict[str, Any]]] = None,
         failed_actions: Optional[List[Dict[str, Any]]] = None,
+        current_url: Optional[str] = None,
+        target_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute a task by generating and performing browser actions.
 
@@ -58,6 +60,9 @@ class Actor:
             dom_tree: Current accessibility tree (YAML).
             marked_elements: Dictionary mapping mark IDs to element selectors.
             short_term_context: Last 3 interaction snapshots for context.
+            failed_actions: Actions that previously failed (for dedup).
+            current_url: The browser's current URL.
+            target_url: The original target URL for this audit session.
 
         Returns:
             Dictionary with action result and next state.
@@ -127,8 +132,16 @@ Never repeat an action that just failed. If an action failed, try a different se
                 error = fa.get("error", "unknown")
                 failed_actions_summary += f"- {action_type} {target} -> {error}\n"
 
+        url_context = ""
+        if current_url or target_url:
+            url_context = f"\nCurrent URL: {current_url or 'unknown'}"
+            if target_url:
+                url_context += f"\nTarget URL (audit subject): {target_url}"
+            url_context += "\nIMPORTANT: For navigate tasks, use the Target URL above. Do NOT invent URLs."
+
         user_prompt = f"""Task: {task.get('goal', 'Unknown')}
 Task Type: {task.get('type', 'unknown')}
+{url_context}
 
 Current DOM Tree:
 ```yaml

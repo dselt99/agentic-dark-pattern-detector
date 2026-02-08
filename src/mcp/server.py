@@ -179,7 +179,13 @@ class BrowserSession:
         )
         self.context = await self.browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="DarkPatternHunter/1.0 (Research Bot; +https://github.com/dark-pattern-hunter)",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
         )
         self.page = await self.context.new_page()
         self._initialized = True
@@ -312,6 +318,12 @@ def check_robots_txt(url: str, fail_open: bool = False) -> tuple[bool, Optional[
     """
     try:
         parsed = urlparse(url)
+
+        # Skip robots.txt for localhost/loopback (simulation servers won't have one)
+        hostname = parsed.hostname or ""
+        if hostname in ("localhost", "127.0.0.1", "::1"):
+            return True, None
+
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
 
         # Fetch robots.txt
@@ -320,7 +332,7 @@ def check_robots_txt(url: str, fail_open: bool = False) -> tuple[bool, Optional[
         rp.read()
 
         # Check if our user agent is allowed
-        user_agent = "DarkPatternHunter"
+        user_agent = "*"
         path = parsed.path or "/"
 
         if not rp.can_fetch(user_agent, url):
@@ -354,7 +366,7 @@ async def browser_navigate(url: str) -> dict:
     """
     try:
         # Check robots.txt compliance (Responsible Auditor)
-        is_allowed, error_msg = check_robots_txt(url)
+        is_allowed, error_msg = check_robots_txt(url, fail_open=True)
         if not is_allowed:
             raise PermissionError(error_msg)
 

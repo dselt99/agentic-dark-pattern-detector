@@ -91,6 +91,10 @@ class Auditor:
                 roach_flags = self._detect_roach_motel_patterns(dom_lower)
                 new_flags.extend(roach_flags)
 
+                # Drip Pricing - check for hidden fees on checkout/order pages
+                drip_flags = self._detect_drip_pricing_language(dom_lower)
+                new_flags.extend(drip_flags)
+
         except Exception as e:
             # Log error but continue
             pass
@@ -174,66 +178,223 @@ class Auditor:
         """Detect Privacy Zuckering via confusing consent patterns in DOM."""
         flags = []
 
-        # Check for cookie consent with asymmetric options
-        if "cookie" in dom_lower or "consent" in dom_lower or "privacy" in dom_lower:
-            # Check for "accept all" prominence vs hidden reject
-            has_accept = "accept" in dom_lower or "agree" in dom_lower
-            has_reject = "reject" in dom_lower or "decline" in dom_lower or "refuse" in dom_lower
+        # Try to find a consent banner region (usually a few hundred chars
+        # around "cookie" or "consent" keywords).  This avoids false negatives
+        # caused by "reject"/"decline" appearing in unrelated article text on
+        # large news sites like BBC.
+        consent_regions = self._extract_consent_regions(dom_lower)
 
-            # If accept exists but reject doesn't, it's suspicious
-            if has_accept and not has_reject:
-                flags.append(AuditFlag(
-                    pattern_type=PatternType.PRIVACY_ZUCKERING,
-                    confidence=0.7,
-                    step_id=len(self.ledger.snapshots) - 1,
-                    evidence="Cookie consent with 'Accept' option but no clear 'Reject' option",
-                    priority="normal",
-                ))
+        if consent_regions:
+            for region in consent_regions:
+                has_accept = "accept" in region or "agree" in region or "ok" in region.split()
+                has_reject = "reject" in region or "decline" in region or "refuse" in region
 
-            # Check for "manage preferences" as hidden reject
-            if "manage" in dom_lower and "preference" in dom_lower and not has_reject:
-                flags.append(AuditFlag(
-                    pattern_type=PatternType.PRIVACY_ZUCKERING,
-                    confidence=0.65,
-                    step_id=len(self.ledger.snapshots) - 1,
-                    evidence="Cookie reject hidden behind 'Manage Preferences' instead of clear reject button",
-                    priority="normal",
-                ))
+                if has_accept and not has_reject:
+                    flags.append(AuditFlag(
+                        pattern_type=PatternType.PRIVACY_ZUCKERING,
+                        confidence=0.7,
+                        step_id=len(self.ledger.snapshots) - 1,
+                        evidence="Cookie consent with 'Accept' option but no clear 'Reject' option",
+                        priority="normal",
+                    ))
+                    break
+
+                if "manage" in region and "preference" in region and not has_reject:
+                    flags.append(AuditFlag(
+                        pattern_type=PatternType.PRIVACY_ZUCKERING,
+                        confidence=0.65,
+                        step_id=len(self.ledger.snapshots) - 1,
+                        evidence="Cookie reject hidden behind 'Manage Preferences' instead of clear reject button",
+                        priority="normal",
+                    ))
+                    break
+        else:
+            # Fallback: whole-page scan for small DOMs (simulations, <10K chars)
+            if len(dom_lower) < 10000:
+                if "cookie" in dom_lower or "consent" in dom_lower or "privacy" in dom_lower:
+                    has_accept = "accept" in dom_lower or "agree" in dom_lower
+                    has_reject = "reject" in dom_lower or "decline" in dom_lower or "refuse" in dom_lower
+
+                    if has_accept and not has_reject:
+                        flags.append(AuditFlag(
+                            pattern_type=PatternType.PRIVACY_ZUCKERING,
+                            confidence=0.7,
+                            step_id=len(self.ledger.snapshots) - 1,
+                            evidence="Cookie consent with 'Accept' option but no clear 'Reject' option",
+                            priority="normal",
+                        ))
+
+                    if "manage" in dom_lower and "preference" in dom_lower and not has_reject:
+                        flags.append(AuditFlag(
+                            pattern_type=PatternType.PRIVACY_ZUCKERING,
+                            confidence=0.65,
+                            step_id=len(self.ledger.snapshots) - 1,
+                            evidence="Cookie reject hidden behind 'Manage Preferences' instead of clear reject button",
+                            priority="normal",
+                        ))
 
         return flags
+
+    def _extract_consent_regions(self, dom_lower: str) -> List[str]:
+        """Extract text regions around cookie/consent keywords.
+
+        Returns chunks of ~500 chars centred on each consent-related keyword
+        occurrence.  Deduplicates overlapping regions.
+        """
+        regions = []
+        consent_anchors = ["cookie", "consent", "gdpr", "privacy banner", "cookie banner"]
+        radius = 500
+        seen_starts = set()
+
+        for anchor in consent_anchors:
+            start = 0
+            while True:
+                idx = dom_lower.find(anchor, start)
+                if idx == -1:
+                    break
+                region_start = max(0, idx - radius)
+                # Deduplicate overlapping windows
+                bucket = region_start // radius
+                if bucket not in seen_starts:
+                    seen_starts.add(bucket)
+                    region_end = min(len(dom_lower), idx + len(anchor) + radius)
+                    regions.append(dom_lower[region_start:region_end])
+                start = idx + len(anchor)
+
+        return regions
 
     def _detect_roach_motel_patterns(self, dom_lower: str) -> List[AuditFlag]:
         """Detect Roach Motel via hidden unsubscribe/cancel patterns in DOM."""
         flags = []
 
         # Check for account/subscription pages
-        if "account" in dom_lower or "subscription" in dom_lower or "membership" in dom_lower:
-            # Look for cancel/unsubscribe
-            has_cancel = "cancel" in dom_lower or "unsubscribe" in dom_lower
+        is_subscription_page = "subscription" in dom_lower or "membership" in dom_lower or "account" in dom_lower
 
-            # Look for confirmshaming language
-            confirmshaming_phrases = [
-                "i don't want",
-                "no thanks",
-                "i prefer not",
-                "lose my benefits",
-                "miss out",
-                "give up",
-            ]
+        if not is_subscription_page:
+            return flags
 
-            found_shaming = [phrase for phrase in confirmshaming_phrases if phrase in dom_lower]
+        # Path 1: Confirmshaming language
+        confirmshaming_phrases = [
+            "i don't want",
+            "no thanks",
+            "i prefer not",
+            "lose my benefits",
+            "miss out",
+            "give up",
+        ]
 
-            if found_shaming:
-                flags.append(AuditFlag(
-                    pattern_type=PatternType.ROACH_MOTEL,
-                    confidence=0.8,
-                    step_id=len(self.ledger.snapshots) - 1,
-                    evidence=f"Confirmshaming language detected: {', '.join(found_shaming[:2])}",
-                    priority="high",
-                ))
+        found_shaming = [phrase for phrase in confirmshaming_phrases if phrase in dom_lower]
+
+        if found_shaming:
+            flags.append(AuditFlag(
+                pattern_type=PatternType.ROACH_MOTEL,
+                confidence=0.8,
+                step_id=len(self.ledger.snapshots) - 1,
+                evidence=f"Confirmshaming language detected: {', '.join(found_shaming[:2])}",
+                priority="high",
+            ))
+            return flags
+
+        # Path 2: Navigation friction — prominent subscribe/sign-up but cancel is
+        # hidden (accordion, small text, buried in help section, etc.)
+        has_prominent_cta = bool(re.search(
+            r'subscribe|sign.?up|join now|get started|start.*(trial|plan)',
+            dom_lower,
+        ))
+        has_cancel = "cancel" in dom_lower or "unsubscribe" in dom_lower
+
+        if has_prominent_cta:
+            if has_cancel:
+                # Cancel exists but may be hidden behind friction
+                friction_indicators = [
+                    "help", "faq", "frequently asked", "support",
+                    "accordion", "footer", "contact",
+                ]
+                has_friction = any(ind in dom_lower for ind in friction_indicators)
+
+                if has_friction:
+                    flags.append(AuditFlag(
+                        pattern_type=PatternType.ROACH_MOTEL,
+                        confidence=0.75,
+                        step_id=len(self.ledger.snapshots) - 1,
+                        evidence="Cancel/unsubscribe option buried in help/FAQ section while subscribe is prominent",
+                        priority="high",
+                    ))
+            else:
+                # Subscribe is prominent but cancel is NOT visible at all.
+                # Only flag if the page has management/help context (indicating
+                # this is a subscription management page, not just a signup form).
+                management_indicators = [
+                    "help", "faq", "frequently asked", "support",
+                    "manage", "settings", "billing history",
+                ]
+                has_management = any(ind in dom_lower for ind in management_indicators)
+
+                if has_management:
+                    flags.append(AuditFlag(
+                        pattern_type=PatternType.ROACH_MOTEL,
+                        confidence=0.7,
+                        step_id=len(self.ledger.snapshots) - 1,
+                        evidence="Subscription page has prominent subscribe action but no visible cancel/unsubscribe option",
+                        priority="high",
+                    ))
 
         return flags
 
+
+    def _detect_drip_pricing_language(self, dom_lower: str) -> List[AuditFlag]:
+        """Detect Drip Pricing via hidden fees on checkout/order summary pages."""
+        flags = []
+
+        # Look for checkout/order context
+        checkout_keywords = ["order summary", "checkout", "payment", "total", "booking"]
+        is_checkout = any(kw in dom_lower for kw in checkout_keywords)
+
+        if not is_checkout:
+            return flags
+
+        # Look for hidden fee indicators
+        fee_keywords = [
+            "service fee", "processing fee", "convenience fee",
+            "booking fee", "booking service fee", "handling fee",
+            "payment processing", "surcharge",
+        ]
+        found_fees = [kw for kw in fee_keywords if kw in dom_lower]
+
+        if found_fees:
+            # Extract dollar amounts to check for price inflation
+            import re
+            prices = re.findall(r'\$(\d+\.?\d*)', dom_lower)
+            prices_float = [float(p) for p in prices if float(p) > 0]
+
+            if len(prices_float) >= 2:
+                min_price = min(prices_float)
+                max_price = max(prices_float)
+                # If the highest price is >2x the lowest, it's likely drip pricing
+                if max_price > min_price * 2 and max_price > 10:
+                    flags.append(AuditFlag(
+                        pattern_type=PatternType.SNEAK_INTO_BASKET,
+                        confidence=0.8,
+                        step_id=len(self.ledger.snapshots) - 1,
+                        evidence=(
+                            f"Drip pricing detected: hidden fees ({', '.join(found_fees[:3])}) "
+                            f"inflate price from ${min_price:.2f} to ${max_price:.2f}"
+                        ),
+                        priority="high",
+                    ))
+                    return flags
+
+            # Even without price extraction, multiple hidden fees are suspicious
+            if len(found_fees) >= 2:
+                flags.append(AuditFlag(
+                    pattern_type=PatternType.SNEAK_INTO_BASKET,
+                    confidence=0.7,
+                    step_id=len(self.ledger.snapshots) - 1,
+                    evidence=f"Multiple hidden fees on checkout page: {', '.join(found_fees[:3])}",
+                    priority="normal",
+                ))
+
+        return flags
 
     def get_high_priority_flags(self) -> List[AuditFlag]:
         """Get flags with high priority that should interrupt the Planner.

@@ -144,7 +144,7 @@ tier2:
     max_steps: 10
     expected_patterns: [privacy_zuckering]
     min_tasks_completed: 1
-    known_flaky: false
+    known_flaky: true  # BBC only shows consent banner to EU visitors; geolocation-dependent
 
   - id: t2_nytimes_subscription
     url: https://www.nytimes.com

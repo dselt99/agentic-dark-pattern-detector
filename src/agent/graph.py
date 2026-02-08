@@ -324,6 +324,8 @@ async def nav_actor_node(state: AgentState) -> AgentState:
                 marked_elements=marked_elements,
                 short_term_context=context_list,
                 failed_actions=failed_actions if failed_actions else None,
+                current_url=browser_state.get("url", state["target_url"]),
+                target_url=state["target_url"],
             )
 
             action = action_result.get("action", {})

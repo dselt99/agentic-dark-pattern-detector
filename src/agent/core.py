@@ -555,9 +555,25 @@ Provide your audit result as a JSON object matching the AuditResult schema."""
             from .debug import reset_debug_state, log_performance_summary, log_state_summary
             reset_debug_state()
             
-            # Execute graph
-            final_state = await self._graph.ainvoke(initial_state)
-            
+            # Execute graph with timeout to prevent infinite hangs on real sites
+            timeout_seconds = self.max_steps * 30
+            try:
+                final_state = await asyncio.wait_for(
+                    self._graph.ainvoke(initial_state),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Graph execution timed out after {timeout_seconds}s"
+                )
+                return AuditResult(
+                    target_url=url,
+                    findings=[],
+                    screenshot_paths=[],
+                    summary=f"Audit timed out after {timeout_seconds}s ({self.max_steps} max steps × 30s).",
+                )
+
             # Log debug summaries
             log_performance_summary()
             log_state_summary(final_state)
